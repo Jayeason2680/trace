@@ -113,6 +113,16 @@
   /* bigger, more prominent time block */
   select#blockSel{font-size:19px;font-weight:600;padding-top:15px;padding-bottom:15px}
 
+  /* motivation quote card */
+  .quote-card{position:relative;overflow:hidden;cursor:pointer;
+    background:linear-gradient(140deg,#1b2133 0%,#171a22 60%);border-color:#2b3552}
+  .quote-card:active{transform:scale(.995)}
+  .quote-mark{position:absolute;top:-22px;left:10px;font-size:120px;line-height:1;font-family:Georgia,"Times New Roman",serif;
+    color:var(--accent);opacity:.12;pointer-events:none;user-select:none}
+  .quote-text{position:relative;z-index:1;font-size:20px;line-height:1.5;font-weight:650;margin:2px 0 0;letter-spacing:.1px}
+  .quote-by{position:relative;z-index:1;color:var(--accent-2);font-size:13.5px;font-weight:600;margin:14px 0 0;letter-spacing:.3px}
+  .quote-hint{position:relative;z-index:1;color:var(--muted2);font-size:11px;margin:10px 0 0;letter-spacing:.4px;text-transform:uppercase}
+
   /* today day navigation */
   .daynav{display:flex;align-items:center;gap:10px}
   .daynav-mid{flex:1;text-align:center;min-width:0}
@@ -306,6 +316,13 @@
       </div>
       <p class="sub" style="margin:8px 0 0">The full text from your last voice entry — copy it anywhere.</p>
       <div class="transcript-text" id="transcriptText"></div>
+    </div>
+
+    <div class="card quote-card" id="quoteCard">
+      <div class="quote-mark">&ldquo;</div>
+      <p class="quote-text" id="quoteText"></p>
+      <p class="quote-by" id="quoteBy"></p>
+      <p class="quote-hint">Tap for another</p>
     </div>
   </section>
 
@@ -759,6 +776,33 @@ function renderTiles(){
   });
 }
 
+// ---- motivation quote (rotates daily; tap to shuffle) ----
+const QUOTES=[
+  {t:"This half-hour is yours. Spend it like it matters — because it does.", by:""},
+  {t:"You can always earn more money. You can never earn more time.", by:""},
+  {t:"Don't trade your life away one cheap hour at a time.", by:""},
+  {t:"Your real business is built in the hours you refuse to waste.", by:""},
+  {t:"Reclaim your time — it's the one thing you can't earn back.", by:""},
+  {t:"Awareness is the first step to taking your time back.", by:""},
+  {t:"What you measure, you can master. What you track, you can change.", by:""},
+  {t:"Build the life you want in 30-minute blocks.", by:""},
+  {t:"Don't count the hours — make the hours count.", by:""},
+  {t:"Lost time is never found again.", by:"Benjamin Franklin"},
+  {t:"Either you run the day, or the day runs you.", by:"Jim Rohn"},
+  {t:"Time is what we want most, but what we use worst.", by:"William Penn"},
+  {t:"The bad news is time flies. The good news is you're the pilot.", by:"Michael Altshuler"}
+];
+let quoteIdx=-1;
+function renderQuote(shuffle){
+  const el=$("#quoteText"), by=$("#quoteBy"); if(!el) return;
+  if(shuffle){ let i; do{ i=Math.floor(Math.random()*QUOTES.length); }while(i===quoteIdx && QUOTES.length>1); quoteIdx=i; }
+  else if(quoteIdx<0){ quoteIdx = Math.floor(Date.now()/86400000) % QUOTES.length; }
+  const q=QUOTES[quoteIdx];
+  el.textContent=q.t;
+  by.textContent = q.by ? "— "+q.by : "";
+  by.style.display = q.by ? "" : "none";
+}
+
 // ---- last voice transcript (full text + copy) ----
 let lastTranscript="";
 function renderTranscript(){
@@ -933,7 +977,7 @@ function renderHourSelects(){
   }
 }
 
-function renderAll(){ buildBlockOptions(); renderLogProgress(); renderTiles(); renderRecent(); renderTranscript(); renderTimeline(); renderInsights(); renderStreak(); renderCatMgr(); renderTargetMgr(); }
+function renderAll(){ buildBlockOptions(); renderLogProgress(); renderTiles(); renderRecent(); renderTranscript(); renderQuote(); renderTimeline(); renderInsights(); renderStreak(); renderCatMgr(); renderTargetMgr(); }
 
 // ---- edit an existing block, or add/backfill a new one ----
 let editCtx=null;
@@ -1040,6 +1084,8 @@ $("#copyTranscript").onclick=async()=>{
   }
   toast(ok?"Copied ✓":"Couldn't copy — select the text");
 };
+
+$("#quoteCard").onclick=()=>renderQuote(true);
 
 $("#rangeSeg").querySelectorAll("button").forEach(b=>b.onclick=()=>{
   curRange=b.dataset.r;
@@ -1261,6 +1307,8 @@ async function startRecording(){
   if(voiceMode==="fill") setMicState("rec");
   startVAD();
 }
+// auto-stop tuning: forgiving of natural pauses. Tap the mic anytime to stop early.
+const VAD = { thresh:0.028, silenceMs:5000, minRecMs:5000, maxRecMs:90000 };
 function startVAD(){
   try{
     audioCtx=new (window.AudioContext||window.webkitAudioContext)();
@@ -1273,8 +1321,10 @@ function startVAD(){
       an.getByteTimeDomainData(buf);
       let sum=0; for(let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum+=v*v; }
       const rms=Math.sqrt(sum/buf.length); const now=Date.now();
-      if(rms>0.045){ started=true; lastVoice=now; }
-      if((started && now-lastVoice>1300) || now-t0>20000){ stopRecording(); return; }
+      if(rms>VAD.thresh){ started=true; lastVoice=now; }
+      const longEnough = now-t0 > VAD.minRecMs;               // never cut off in the first few seconds
+      const silentAfterSpeech = started && (now-lastVoice > VAD.silenceMs);
+      if((longEnough && silentAfterSpeech) || now-t0 > VAD.maxRecMs){ stopRecording(); return; }
       vadRAF=requestAnimationFrame(loop);
     };
     vadRAF=requestAnimationFrame(loop);
