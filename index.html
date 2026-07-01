@@ -1,0 +1,1118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Trace">
+<meta name="theme-color" content="#0e1014">
+<title>Trace — 30-minute time audit</title>
+<style>
+  :root{
+    --bg:#0e1014; --card:#16191f; --card2:#1c2029; --card3:#222633; --line:#272c37;
+    --text:#e8eaef; --muted:#8a909d; --muted2:#646b78;
+    --accent:#7c9cf5; --accent-2:#9db4f8; --accent-soft:#7c9cf522;
+    --good:#34d399; --warn:#fbbf24; --bad:#f87171;
+    --r:16px; --r-sm:12px; --r-xs:10px;
+    --shadow:0 1px 0 #ffffff08, 0 12px 34px #00000045;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text);
+    font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    padding-bottom:calc(74px + env(safe-area-inset-bottom));
+    -webkit-font-smoothing:antialiased;
+  }
+  body.noscroll{overflow:hidden}
+  .wrap{max-width:560px;margin:0 auto;padding:0 16px}
+
+  header{
+    padding:calc(15px + env(safe-area-inset-top)) 16px 13px;
+    max-width:560px;margin:0 auto;
+    display:flex;align-items:center;justify-content:space-between;gap:8px;
+    border-bottom:1px solid var(--line);
+  }
+  header .title{font-weight:700;font-size:21px;letter-spacing:.2px}
+  header .title small{font-weight:500;color:var(--muted);font-size:11.5px;display:block;letter-spacing:.4px;margin-top:1px}
+  header .clock{color:var(--muted);font-variant-numeric:tabular-nums;font-size:12px;text-align:right;letter-spacing:.3px}
+  header .clock b{display:block;color:var(--text);font-size:15px;font-weight:600}
+
+  section.tab{display:none;padding-top:8px}
+  section.tab.active{display:block;animation:fade .2s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin:14px 0;box-shadow:var(--shadow)}
+  .card h2{margin:0 0 4px;font-size:15.5px;letter-spacing:.1px;font-weight:650}
+  .card .sub{color:var(--muted);font-size:13px;margin:0 0 14px;line-height:1.5}
+  .row{display:flex;gap:8px;align-items:center}
+
+  label.fld{display:block;color:var(--muted);font-size:11px;margin:14px 0 7px;letter-spacing:.5px;text-transform:uppercase;font-weight:600}
+  label.fld:first-child{margin-top:0}
+  select,input[type=text],input[type=password],textarea{
+    width:100%;background:var(--card2);color:var(--text);border:1px solid var(--line);
+    border-radius:var(--r-sm);padding:13px 12px;font-size:16px;font-family:inherit;transition:border-color .15s, box-shadow .15s;
+  }
+  select{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238a909d' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>");background-repeat:no-repeat;background-position:right 12px center;padding-right:34px}
+  textarea{min-height:120px;resize:vertical;line-height:1.5}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+
+  .inputrow{display:flex;gap:8px;align-items:stretch}
+  .inputrow input{flex:1}
+  .mic{
+    flex:0 0 auto;width:52px;border:1px solid var(--line);background:var(--card2);
+    border-radius:var(--r-sm);font-size:21px;display:grid;place-items:center;cursor:pointer;color:var(--text);transition:background .15s,border-color .15s
+  }
+  .mic.live{background:#ef444422;border-color:#ef4444;animation:pulse 1.1s infinite}
+  .mic[disabled]{opacity:.4}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 #ef444455}50%{box-shadow:0 0 0 7px #ef444400}}
+
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:4px}
+  .chip{
+    border:1px solid var(--line);background:var(--card2);color:var(--text);
+    padding:8px 11px;border-radius:999px;font-size:13.5px;cursor:pointer;display:flex;align-items:center;gap:6px;
+    transition:transform .05s ease, border-color .15s, background .15s;
+  }
+  .chip:active{transform:scale(.95)}
+  .chip .dot{width:8px;height:8px;border-radius:50%}
+  .chip.sel{border-color:var(--text);background:#ffffff16;font-weight:600}
+
+  button.primary{
+    width:100%;margin-top:16px;border:none;border-radius:var(--r-sm);padding:15px;
+    background:var(--accent);color:#0b0e14;font-weight:700;font-size:16px;cursor:pointer;letter-spacing:.2px;transition:filter .12s,transform .05s
+  }
+  button.primary:active{filter:brightness(.94);transform:scale(.995)}
+  button.ghost{background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 14px;font-size:14px;cursor:pointer;transition:background .15s}
+  button.ghost:active{background:var(--card3)}
+  .btnrow{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .btnrow button{flex:1;min-width:120px}
+
+  /* timeline */
+  .tl{display:flex;flex-direction:column;gap:1px;border-radius:var(--r-sm);overflow:hidden;border:1px solid var(--line)}
+  .blk{display:flex;align-items:center;gap:10px;padding:11px 12px;background:var(--card2);min-height:46px}
+  .blk.empty{background:#13161d}
+  .blk.now{box-shadow:inset 3px 0 0 var(--accent);background:#1a2030}
+  .blk .t{flex:0 0 48px;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+  .blk .bar{flex:0 0 4px;align-self:stretch;border-radius:4px;background:transparent}
+  .blk .what{flex:1;font-size:14px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .blk .what.muted{color:var(--muted2);font-style:italic}
+  .blk .cat{flex:0 0 auto;font-size:15px;color:var(--muted);cursor:pointer;padding:1px 4px;border-radius:8px}
+  .blk .cat:active{background:#ffffff1a}
+  .blk .del{flex:0 0 auto;color:var(--muted2);background:none;border:none;font-size:17px;cursor:pointer;padding:4px;line-height:1}
+  .blk.empty .what{cursor:pointer}
+
+  /* insights bars */
+  .seg{display:flex;gap:6px;margin-bottom:16px}
+  .seg button{flex:1;padding:9px;border-radius:var(--r-xs);border:1px solid var(--line);background:var(--card2);color:var(--muted);font-size:13px;cursor:pointer;transition:.15s}
+  .seg button.on{background:#ffffff14;color:var(--text);border-color:var(--text);font-weight:600}
+  .brk{display:flex;flex-direction:column;gap:11px}
+  .brkrow .top{display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px}
+  .brkrow .top .nm{display:flex;align-items:center;gap:7px}
+  .brkrow .top .val{color:var(--muted);font-variant-numeric:tabular-nums}
+  .track{height:9px;background:var(--card2);border-radius:6px;overflow:hidden}
+  .fill{height:100%;border-radius:6px;transition:width .4s ease}
+
+  .stat{display:flex;gap:10px}
+  .stat .box{flex:1;background:var(--card2);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px 8px;text-align:center}
+  .stat .box b{display:block;font-size:24px;font-variant-numeric:tabular-nums;font-weight:700}
+  .stat .box span{color:var(--muted);font-size:10.5px;letter-spacing:.4px;text-transform:uppercase}
+
+  .progress{height:8px;background:var(--card2);border-radius:6px;overflow:hidden;margin-top:12px}
+  .progress>div{height:100%;background:linear-gradient(90deg,var(--accent),var(--good));transition:width .4s ease}
+
+  .note{color:var(--muted);font-size:12.5px;line-height:1.55}
+  .empty-state{text-align:center;color:var(--muted);padding:26px 8px}
+  .empty-state .big{font-size:30px;margin-bottom:8px}
+
+  .catmgr{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+  .catitem{display:flex;align-items:center;gap:10px;background:var(--card2);border:1px solid var(--line);border-radius:var(--r-xs);padding:9px 11px}
+  .catitem .dot{width:12px;height:12px;border-radius:50%}
+  .catitem .nm{flex:1;font-size:14px}
+  .catitem button{background:none;border:none;color:var(--muted2);font-size:16px;cursor:pointer}
+
+  /* floating assistant button */
+  .fab{
+    position:fixed;bottom:calc(82px + env(safe-area-inset-bottom));z-index:30;
+    right:max(16px, calc(50% - 280px + 16px));
+    width:58px;height:58px;border-radius:50%;border:none;cursor:pointer;
+    background:radial-gradient(circle at 32% 28%,var(--accent-2),var(--accent));
+    color:#0b0e14;font-size:25px;display:grid;place-items:center;
+    box-shadow:0 10px 26px #00000066,0 0 0 1px #ffffff12;transition:transform .12s
+  }
+  .fab:active{transform:scale(.93)}
+
+  nav.tabbar{
+    position:fixed;left:0;right:0;bottom:0;z-index:20;
+    background:#11141bd9;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-top:1px solid var(--line);
+    display:flex;padding:8px 8px calc(8px + env(safe-area-inset-bottom));
+  }
+  nav.tabbar button{
+    flex:1;background:none;border:none;color:var(--muted);font-size:10.5px;cursor:pointer;
+    display:flex;flex-direction:column;align-items:center;gap:3px;padding:4px;letter-spacing:.2px;transition:color .15s
+  }
+  nav.tabbar button .ic{font-size:20px}
+  nav.tabbar button.on{color:var(--text)}
+
+  .toast{
+    position:fixed;left:50%;bottom:calc(88px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(8px);
+    background:#fff;color:#0b0e14;padding:10px 14px;border-radius:999px;font-size:14px;font-weight:600;
+    opacity:0;pointer-events:none;transition:.22s;z-index:50;box-shadow:0 8px 24px #00000060;
+    display:flex;align-items:center;gap:10px;max-width:90vw
+  }
+  .toast.show{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
+  .toast-act{background:#0b0e14;color:#fff;border:none;border-radius:999px;padding:6px 13px;font-size:13px;font-weight:700;cursor:pointer}
+
+  /* ===== voice sheet ===== */
+  .vsheet{position:fixed;inset:0;z-index:60;background:var(--bg);display:flex;flex-direction:column;transform:translateY(100%);transition:transform .3s cubic-bezier(.32,.72,0,1);visibility:hidden}
+  .vsheet.open{transform:none;visibility:visible}
+  .vsheet-inner{max-width:560px;width:100%;margin:0 auto;display:flex;flex-direction:column;height:100%;padding:calc(10px + env(safe-area-inset-top)) 16px calc(18px + env(safe-area-inset-bottom))}
+  .vhead{display:flex;align-items:center;justify-content:space-between;padding:6px 2px 14px}
+  .vhead .vt{font-weight:700;font-size:17px}
+  .vhead .vt small{display:block;font-weight:500;color:var(--muted);font-size:11px;letter-spacing:.3px;margin-top:1px}
+  .vclose{background:var(--card2);border:1px solid var(--line);color:var(--text);width:36px;height:36px;border-radius:50%;font-size:20px;cursor:pointer;line-height:1}
+  .vlog{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:6px 2px 12px}
+  .vbubble{max-width:84%;padding:11px 14px;border-radius:16px;font-size:15px;line-height:1.45;white-space:pre-wrap;word-wrap:break-word}
+  .vbubble.user{align-self:flex-end;background:var(--accent);color:#0b0e14;border-bottom-right-radius:5px}
+  .vbubble.assistant{align-self:flex-start;background:var(--card2);border:1px solid var(--line);border-bottom-left-radius:5px}
+  .vbubble.err{align-self:flex-start;background:#f8717118;border:1px solid #f8717140;color:#fca5a5}
+  .vorb-wrap{display:flex;flex-direction:column;align-items:center;gap:11px;padding-top:12px}
+  .vorb{width:94px;height:94px;border-radius:50%;border:none;cursor:pointer;color:#0b0e14;font-size:33px;display:grid;place-items:center;
+    background:radial-gradient(circle at 32% 28%,var(--accent-2),var(--accent));box-shadow:0 8px 30px #7c9cf544;transition:transform .14s}
+  .vorb:active{transform:scale(.95)}
+  .vorb[disabled]{opacity:.45}
+  .vorb.listening{background:radial-gradient(circle at 32% 28%,#fca5a5,#ef4444);animation:orbpulse 1.2s infinite}
+  .vorb.thinking{background:radial-gradient(circle at 32% 28%,#fcd34d,#fbbf24);animation:orbpulse 1s infinite}
+  .vorb.speaking{background:radial-gradient(circle at 32% 28%,#6ee7b7,#34d399);animation:orbpulse 1.6s infinite}
+  @keyframes orbpulse{0%,100%{box-shadow:0 0 0 0 #ffffff00,0 8px 30px #00000045}50%{box-shadow:0 0 0 16px #ffffff12,0 8px 30px #00000045}}
+  .vstatus{color:var(--muted);font-size:13px;min-height:18px;text-align:center}
+  .vsetup{text-align:center;margin:auto;max-width:300px;display:flex;flex-direction:column;align-items:center;gap:8px}
+  .vsetup-ic{font-size:42px}
+  .vsetup h3{margin:4px 0 0;font-size:19px}
+  .vsetup p{color:var(--muted);font-size:14px;line-height:1.55;margin:0}
+  .vsetup .primary{width:auto;padding:12px 24px;margin-top:8px}
+  .vlink{color:var(--accent);font-size:13px;text-decoration:none}
+
+  /* change-bucket bottom sheet */
+  .bsheet{position:fixed;inset:0;z-index:65;background:#00000099;display:none;align-items:flex-end}
+  .bsheet.open{display:flex;animation:fade .16s ease}
+  .bsheet-card{width:100%;max-width:560px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom));box-shadow:0 -12px 34px #00000066}
+  .bsheet-card h2{margin:0 0 4px;font-size:15.5px}
+  .bsheet-card .sub{color:var(--muted);font-size:13px;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bsheet-card .chips{margin-top:12px}
+</style>
+</head>
+<body>
+<header>
+  <div class="title">Trace<small>30-minute time audit</small></div>
+  <div class="clock"><b id="clkTime">--:--</b><span id="clkDate">—</span></div>
+</header>
+
+<main class="wrap">
+
+  <!-- LOG -->
+  <section class="tab active" id="tab-log">
+    <div class="card">
+      <h2>What did you just do?</h2>
+      <p class="sub">Speak it or type it — Trace sorts it into a bucket automatically. Tap a bucket icon on Today to change it.</p>
+
+      <label class="fld">Time block</label>
+      <select id="blockSel"></select>
+
+      <label class="fld">What happened</label>
+      <div class="inputrow">
+        <input type="text" id="logText" placeholder="e.g. scrolled instagram in bed" autocomplete="off" enterkeyhint="done">
+        <button class="mic" id="micBtn" aria-label="Dictate this entry" title="Dictate">🎤</button>
+      </div>
+
+      <button class="primary" id="saveBtn">Log it</button>
+    </div>
+
+    <div class="card" id="recentCard">
+      <h2>Just logged</h2>
+      <div class="tl" id="recentList"></div>
+    </div>
+  </section>
+
+  <!-- TODAY -->
+  <section class="tab" id="tab-today">
+    <div class="card">
+      <h2 id="todayHead">Today</h2>
+      <p class="sub" id="todaySub">Your day, in 30-minute blocks. Tap an empty slot to fill it.</p>
+      <div class="tl" id="timeline"></div>
+    </div>
+  </section>
+
+  <!-- INSIGHTS -->
+  <section class="tab" id="tab-insights">
+    <div class="card">
+      <h2>Where did the time go?</h2>
+      <div class="seg" id="rangeSeg">
+        <button data-r="today" class="on">Today</button>
+        <button data-r="7">7 days</button>
+        <button data-r="all">All</button>
+      </div>
+      <div class="stat">
+        <div class="box"><b id="statBlocks">0</b><span>blocks</span></div>
+        <div class="box"><b id="statHours">0h</b><span>logged</span></div>
+        <div class="box"><b id="statTop">—</b><span>biggest pull</span></div>
+      </div>
+      <div class="brk" id="breakdown" style="margin-top:16px"></div>
+    </div>
+
+    <div class="card">
+      <h2>Awareness streak</h2>
+      <p class="sub" id="streakSub">Phase 1 is 20 days of seeing your time clearly.</p>
+      <div class="stat">
+        <div class="box"><b id="streakNum">0</b><span>day streak</span></div>
+        <div class="box"><b id="streakDays">0</b><span>days logged</span></div>
+        <div class="box"><b id="streakBlocks">0</b><span>total blocks</span></div>
+      </div>
+      <div class="progress"><div id="streakBar" style="width:0%"></div></div>
+      <p class="note" id="streakNote" style="margin-top:10px"></p>
+    </div>
+  </section>
+
+  <!-- MORE -->
+  <section class="tab" id="tab-more">
+    <div class="card" id="voiceCard">
+      <h2>Voice assistant</h2>
+      <p class="sub">Talk to Trace using ChatGPT — say what you did and it logs it, or ask where your time went. Your key is stored only on this device and used to call OpenAI directly from your phone.</p>
+      <label class="fld">OpenAI API key</label>
+      <div class="inputrow">
+        <input type="password" id="aiKey" placeholder="sk-..." autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="ghost" id="aiSave" style="flex:0 0 auto">Save</button>
+      </div>
+      <div class="row" style="justify-content:space-between;margin-top:10px">
+        <span class="note" id="aiStatus">Not connected</span>
+        <a class="vlink" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">Get a key →</a>
+      </div>
+      <label class="fld">Reply voice</label>
+      <select id="aiVoice"></select>
+      <div class="btnrow"><button class="ghost" id="aiClear" style="color:#f87171;border-color:#f8717144">Remove key</button></div>
+      <p class="note" style="margin-top:8px">Audio you speak is sent to OpenAI for transcription and replies. Standard API usage applies — usually a few cents per session. Needs an internet connection.</p>
+    </div>
+
+    <div class="card">
+      <h2>Bulk add</h2>
+      <p class="sub">Paste a list — one block per line, a leading time is optional. Handy for catching up the day at once.</p>
+      <textarea id="bulkText" placeholder="07:00 woke up, airplane mode, made coffee
+07:30 trading journal review
+08:00 scrolled instagram
+08:30 gym — push day"></textarea>
+      <button class="primary" id="bulkBtn">Add these blocks</button>
+      <p class="note" style="margin-top:8px">Lines are auto-sorted into buckets by keywords. Fix any bucket on the Today tab.</p>
+    </div>
+
+    <div class="card">
+      <h2>Your day window</h2>
+      <p class="sub">When you usually wake and sleep — sets the blocks shown on Today.</p>
+      <div class="row">
+        <div style="flex:1"><label class="fld">Wake</label><select id="wakeSel"></select></div>
+        <div style="flex:1"><label class="fld">Sleep</label><select id="sleepSel"></select></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Buckets</h2>
+      <p class="sub">Add what's missing or remove what you don't use.</p>
+      <div class="catmgr" id="catMgr"></div>
+      <div class="inputrow" style="margin-top:10px">
+        <input type="text" id="newCat" placeholder="Add a bucket (e.g. Side project)" autocomplete="off">
+        <button class="ghost" id="addCatBtn" style="flex:0 0 auto">Add</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Backup</h2>
+      <p class="sub">Your log lives only on this device. Export now and then so you never lose it. (Your API key is never included in exports.)</p>
+      <div class="btnrow">
+        <button class="ghost" id="expJson">Export JSON</button>
+        <button class="ghost" id="expCsv">Export CSV</button>
+        <button class="ghost" id="impBtn">Import JSON</button>
+      </div>
+      <input type="file" id="impFile" accept="application/json" style="display:none">
+      <div class="btnrow"><button class="ghost" id="clearBtn" style="color:#f87171;border-color:#f8717144">Erase everything</button></div>
+    </div>
+
+    <div class="card">
+      <h2>Put it on your phone</h2>
+      <p class="note">Open this file over <b>https</b> (or add it to your Home Screen), then in Safari/Chrome tap <b>Share → Add to Home Screen</b>. It opens full-screen like an app. Voice needs a secure (https) page and microphone permission. Set a repeating 30-minute alarm in your Clock app as your nudge to log.</p>
+    </div>
+  </section>
+
+</main>
+
+<button class="fab" id="fab" aria-label="Talk to Trace">🎙️</button>
+
+<nav class="tabbar">
+  <button data-tab="log" class="on"><span class="ic">✏️</span>Log</button>
+  <button data-tab="today"><span class="ic">📋</span>Today</button>
+  <button data-tab="insights"><span class="ic">📊</span>Insights</button>
+  <button data-tab="more"><span class="ic">⚙️</span>More</button>
+</nav>
+
+<!-- voice assistant sheet -->
+<div class="vsheet" id="vsheet">
+  <div class="vsheet-inner">
+    <div class="vhead">
+      <div class="vt">Trace Assistant<small>powered by ChatGPT</small></div>
+      <button class="vclose" id="vClose" aria-label="Close">×</button>
+    </div>
+    <div class="vlog" id="vLog"></div>
+    <div class="vorb-wrap">
+      <button class="vorb" id="vOrb" aria-label="Tap to talk">🎤</button>
+      <div class="vstatus" id="vStatus">Tap to talk</div>
+    </div>
+  </div>
+</div>
+
+<!-- change-bucket sheet -->
+<div class="bsheet" id="bsheet">
+  <div class="bsheet-card">
+    <h2>Move to bucket</h2>
+    <p class="sub" id="bsSub"></p>
+    <div class="chips" id="bsChips"></div>
+    <button class="ghost" id="bsCancel" style="width:100%;margin-top:14px">Cancel</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const pad = n => String(n).padStart(2,"0");
+const KEY = "trace.v1";
+const AIKEY = "trace.ai";
+
+// OpenAI model defaults — editable. tts is optional (text still works if it fails).
+const AI = { transcribe:"whisper-1", chat:"gpt-4o-mini", tts:"tts-1" };
+const VOICES = ["nova","alloy","echo","fable","onyx","shimmer"];
+
+const PALETTE = ["#7c9cf5","#34d399","#60a5fa","#f472b6","#fbbf24","#a78bfa","#fb923c","#22d3ee","#f87171","#c084fc","#94a3b8","#facc15","#4ade80","#38bdf8"];
+const DEFAULT_CATS = [
+  {id:"focus",        name:"Focus",      emoji:"🎯", color:"#7c9cf5"},
+  {id:"trading",      name:"Trading",    emoji:"📈", color:"#34d399"},
+  {id:"learning",     name:"Learning",   emoji:"📚", color:"#60a5fa"},
+  {id:"body",         name:"Body",       emoji:"🏃", color:"#f472b6"},
+  {id:"people",       name:"People",     emoji:"🤝", color:"#fbbf24"},
+  {id:"admin",        name:"Admin",      emoji:"🧹", color:"#a78bfa"},
+  {id:"meals",        name:"Meals",      emoji:"🍽️", color:"#fb923c"},
+  {id:"rest",         name:"Rest",       emoji:"🌙", color:"#22d3ee"},
+  {id:"scrolling",    name:"Scrolling",  emoji:"📱", color:"#f87171"},
+  {id:"entertainment",name:"Entertain",  emoji:"🎬", color:"#c084fc"},
+  {id:"drift",        name:"Drift",      emoji:"🌫️", color:"#94a3b8"}
+];
+// ordered keyword matching — first hit wins
+const KEYWORDS = [
+  ["scrolling", ["instagram","insta","tiktok","tik tok","reddit","scroll","feed","shorts","doomscroll","twitter","threads"]],
+  ["drift",     ["porn","zone out","zoned","nothing","idk","wasted","procrast","daze","mindless","stared","drift"]],
+  ["trading",   ["trade","trading","chart","backtest","ctrader","mt4","mt5","xau","gold ","market","r-multiple","drawdown","journal review"]],
+  ["body",      ["gym","run","ran","lift","workout","exercise","walk","stretch","yoga","cold shower","shower","cardio"]],
+  ["meals",     ["eat","ate","lunch","dinner","breakfast","coffee","meal","snack","cook","food","tea"]],
+  ["rest",      ["sleep","slept","nap","rest","lay down","lie down","relax","bed","meditat","breathe"]],
+  ["learning",  ["read","study","studied","course","learn","book","lecture","research","notes"]],
+  ["people",    ["call","friend","family","talk","talked","meet","met","date","partner","girlfriend","hang","chat with","dinner with"]],
+  ["admin",     ["clean","laundry","chore","admin","email","errand","bank","bills","tidy","plan","groceries","shop"]],
+  ["entertainment",["movie","netflix","show","game","gaming","watch","youtube","podcast","music","stream"]],
+  ["focus",     ["work","code","coding","build","wrote","writing","focus","deep","project","design","ship"]]
+];
+
+let state = load();
+let aiCfg = loadAI();
+
+function load(){
+  try{
+    const s = JSON.parse(localStorage.getItem(KEY));
+    if(s && Array.isArray(s.entries)){
+      s.categories = (Array.isArray(s.categories)&&s.categories.length)?s.categories:DEFAULT_CATS.slice();
+      s.settings = s.settings || {wake:7, sleep:23};
+      return s;
+    }
+  }catch(e){}
+  return {entries:[], categories:DEFAULT_CATS.slice(), settings:{wake:7, sleep:23}};
+}
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){ toast("Couldn't save — storage blocked"); } }
+
+function loadAI(){ try{ const j=JSON.parse(localStorage.getItem(AIKEY)); if(j&&typeof j==="object") return {key:j.key||"", voice:j.voice||"nova"}; }catch(e){} return {key:"", voice:"nova"}; }
+function saveAI(){ try{ localStorage.setItem(AIKEY, JSON.stringify(aiCfg)); }catch(e){} }
+
+// ---- time helpers ----
+function snap(d){ const x=new Date(d); x.setSeconds(0,0); x.setMinutes(x.getMinutes()<30?0:30); return x; }
+function blkStart(h,m){ const d=new Date(); d.setHours(h,m,0,0); return d; }
+function blkLabel(d){ return pad(d.getHours())+":"+pad(d.getMinutes()); }
+function blkRange(d){ const e=new Date(d.getTime()+30*60000); return blkLabel(d)+"–"+blkLabel(e); }
+function ampm(h,m){ const ap=h<12?"am":"pm"; let hh=h%12; if(hh===0) hh=12; return m===0?hh+ap:hh+":"+pad(m)+ap; }
+function blkRange12(d){ const e=new Date(d.getTime()+30*60000); return ampm(d.getHours(),d.getMinutes())+"–"+ampm(e.getHours(),e.getMinutes()); }
+function dayKey(d){ d=new Date(d); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); }
+function catById(id){ return state.categories.find(c=>c.id===id) || {id:"none",name:"—",emoji:"·",color:"#646b78"}; }
+
+function categorize(text){
+  const t=(" "+text+" ").toLowerCase();
+  for(const [cat,words] of KEYWORDS){
+    if(!state.categories.some(c=>c.id===cat)) continue;
+    for(const w of words){ if(t.includes(w)) return cat; }
+  }
+  return null;
+}
+
+// parse pasted/voice recap -> [{when, text, category}]
+function parseBulk(text){
+  const lines = text.split(/\r?\n+/).map(s=>s.trim()).filter(Boolean);
+  const out=[]; let seq=0; const now=new Date();
+  for(const line of lines){
+    const m = line.match(/^(\d{1,2})[:.h](\d{2})\s*(am|pm)?\s*[-–—:)]*\s*(.*)$/i);
+    let when, body;
+    if(m){
+      let h=+m[1], mn=+m[2]; const ap=(m[3]||"").toLowerCase();
+      if(ap==="pm"&&h<12)h+=12; if(ap==="am"&&h===12)h=0;
+      if(h>23) h=23; if(mn>59) mn=59;
+      when=snap(blkStart(h,mn)); body=(m[4]||"").trim()||line;
+    }else{
+      when=snap(new Date(now.getTime()+seq*30*60000)); body=line; seq++;
+    }
+    body=body.replace(/^[-–—:)\s]+/,"").trim();
+    if(body) out.push({when, text:body, category:categorize(body)});
+  }
+  return out;
+}
+
+// ---- mutations ----
+function addEntry(when, text, category){
+  state.entries.push({id:Date.now()+"_"+Math.random().toString(36).slice(2,7),
+    ts:snap(when).toISOString(), text:String(text).trim(), category:category||null});
+  save();
+}
+let lastDeleted=null;
+function delEntry(id){
+  const idx=state.entries.findIndex(e=>e.id===id);
+  if(idx<0) return;
+  lastDeleted={entry:state.entries[idx], idx};
+  state.entries.splice(idx,1); save(); renderAll();
+  toast("Deleted", "Undo", ()=>{
+    if(!lastDeleted) return;
+    state.entries.splice(Math.min(lastDeleted.idx,state.entries.length),0,lastDeleted.entry);
+    lastDeleted=null; save(); renderAll();
+  });
+}
+
+// ===== UI state =====
+function buildBlockOptions(forceNow){
+  const sel=$("#blockSel"); const prev=forceNow?"":sel.value; sel.innerHTML="";
+  const {wake,sleep}=state.settings;
+  const cur=snap(new Date());
+  const curMin=cur.getHours()*60+cur.getMinutes();
+  const mins=new Set();
+  for(let h=wake; h<=sleep; h++){ for(let m of [0,30]){ if(h===sleep && m===30) continue; mins.add(h*60+m); } }
+  mins.add(curMin); // always allow logging the current half-hour, even outside your day window
+  for(const tot of [...mins].sort((a,b)=>a-b)){
+    const h=Math.floor(tot/60), m=tot%60;
+    const d=blkStart(h,m); const o=document.createElement("option"); o.value=h+":"+m;
+    if(tot===curMin){
+      // the current block reads from the actual time now → end of the block, e.g. "11:43pm–12am"
+      const rn=new Date(), e=new Date(d.getTime()+30*60000);
+      o.textContent=ampm(rn.getHours(),rn.getMinutes())+"–"+ampm(e.getHours(),e.getMinutes());
+      o.selected=true;
+    } else {
+      o.textContent=blkRange12(d);
+    }
+    sel.appendChild(o);
+  }
+  if(prev && Array.from(sel.options).some(o=>o.value===prev)) sel.value=prev;
+}
+function selectedWhen(){
+  const [h,m]=$("#blockSel").value.split(":").map(Number);
+  return blkStart(h,m);
+}
+
+function blockRowHTML(d, entry, isNow){
+  const c = entry ? catById(entry.category) : null;
+  if(entry){
+    return `<div class="blk${isNow?' now':''}">
+      <span class="t">${blkLabel(d)}</span>
+      <span class="bar" style="background:${c.color}"></span>
+      <span class="what">${esc(entry.text)}</span>
+      <span class="cat" data-bucket="${entry.id}" title="Change bucket">${c.emoji}</span>
+      <button class="del" data-del="${entry.id}" aria-label="Delete">×</button></div>`;
+  }
+  return `<div class="blk empty${isNow?' now':''}" data-fill="${d.getHours()}:${d.getMinutes()}">
+      <span class="t">${blkLabel(d)}</span>
+      <span class="bar"></span>
+      <span class="what muted">—</span></div>`;
+}
+
+function renderTimeline(){
+  const tl=$("#timeline"); const {wake,sleep}=state.settings;
+  const today=dayKey(new Date()); const cur=snap(new Date());
+  const byBlock={};
+  state.entries.filter(e=>dayKey(e.ts)===today).forEach(e=>{
+    const d=new Date(e.ts); const k=d.getHours()+":"+d.getMinutes();
+    byBlock[k] = (byBlock[k]||[]).concat(e);
+  });
+  let html=""; let filled=0, past=0;
+  for(let h=wake; h<=sleep; h++){
+    for(let m of [0,30]){
+      if(h===sleep && m===30) continue;
+      const d=blkStart(h,m); const isNow=(d.getHours()===cur.getHours()&&d.getMinutes()===cur.getMinutes());
+      const arr=byBlock[h+":"+m];
+      if(d<=cur) past++;
+      if(arr){ filled++; arr.forEach(e=>html+=blockRowHTML(d,e,isNow)); }
+      else html+=blockRowHTML(d,null,isNow);
+    }
+  }
+  tl.innerHTML=html;
+  $("#todaySub").textContent = `${filled} blocks logged · ${Math.max(past-filled,0)} slots still blank so far today.`;
+  $("#todayHead").textContent = new Date().toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric"});
+  tl.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>delEntry(b.dataset.del));
+  tl.querySelectorAll("[data-bucket]").forEach(b=>b.onclick=()=>openBucket(b.dataset.bucket));
+  tl.querySelectorAll("[data-fill]").forEach(b=>b.onclick=()=>{
+    switchTab("log"); $("#blockSel").value=b.dataset.fill; $("#logText").focus();
+  });
+}
+
+function renderRecent(){
+  const list=$("#recentList");
+  const recent=state.entries.slice(-4).reverse();
+  if(!recent.length){ $("#recentCard").style.display="none"; return; }
+  $("#recentCard").style.display="";
+  list.innerHTML = recent.map(e=>{
+    const d=new Date(e.ts); const c=catById(e.category);
+    return `<div class="blk"><span class="t">${blkLabel(d)}</span>
+      <span class="bar" style="background:${c.color}"></span>
+      <span class="what">${esc(e.text)}</span><span class="cat" data-bucket="${e.id}" title="Change bucket">${c.emoji}</span>
+      <button class="del" data-del="${e.id}" aria-label="Delete">×</button></div>`;
+  }).join("");
+  list.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>delEntry(b.dataset.del));
+  list.querySelectorAll("[data-bucket]").forEach(b=>b.onclick=()=>openBucket(b.dataset.bucket));
+}
+
+let curRange="today";
+function rangeEntries(range){
+  if(range==="all") return state.entries.slice();
+  if(range==="today"){ const k=dayKey(new Date()); return state.entries.filter(e=>dayKey(e.ts)===k); }
+  const cut=Date.now()-7*86400000;
+  return state.entries.filter(e=>new Date(e.ts).getTime()>=cut);
+}
+function aggregate(range){
+  const ents=rangeEntries(range);
+  const counts={}; ents.forEach(e=>{ const id=e.category||"none"; counts[id]=(counts[id]||0)+1; });
+  const total=ents.length;
+  const breakdown=Object.entries(counts).sort((a,b)=>b[1]-a[1]).map(([id,n])=>({
+    bucket:id, name:catById(id).name, blocks:n, hours:+(n*0.5).toFixed(1), percent: total?Math.round(n/total*100):0
+  }));
+  return {range, total_blocks:total, hours:+(total*0.5).toFixed(1), breakdown};
+}
+function renderInsights(){
+  const ents=rangeEntries(curRange);
+  const counts={}; ents.forEach(e=>{ const id=e.category||"none"; counts[id]=(counts[id]||0)+1; });
+  const total=ents.length;
+  $("#statBlocks").textContent=total;
+  $("#statHours").textContent=(total*0.5).toFixed(total%2?1:0).replace(/\.0$/,"")+"h";
+  const sorted=Object.entries(counts).sort((a,b)=>b[1]-a[1]);
+  const top=sorted[0];
+  $("#statTop").textContent = top ? catById(top[0]).emoji : "—";
+
+  const brk=$("#breakdown");
+  if(!total){ brk.innerHTML=`<div class="empty-state"><div class="big">🫧</div>No blocks in this range yet.<br>Log a half-hour and it'll show up here.</div>`; return; }
+  const max=top[1];
+  brk.innerHTML = sorted.map(([id,n])=>{
+    const c=catById(id); const pct=Math.round(n/total*100);
+    return `<div class="brkrow">
+      <div class="top"><span class="nm">${c.emoji} ${esc(c.name)}</span>
+        <span class="val">${(n*0.5).toString().replace(/\.0$/,"")}h · ${pct}%</span></div>
+      <div class="track"><div class="fill" style="width:${Math.round(n/max*100)}%;background:${c.color}"></div></div>
+    </div>`;
+  }).join("");
+}
+
+function renderStreak(){
+  const days=new Set(state.entries.map(e=>dayKey(e.ts)));
+  const total=state.entries.length;
+  let streak=0; const d=new Date(); d.setHours(12,0,0,0);
+  if(!days.has(dayKey(d))) d.setDate(d.getDate()-1);
+  while(days.has(dayKey(d))){ streak++; d.setDate(d.getDate()-1); }
+  $("#streakNum").textContent=streak;
+  $("#streakDays").textContent=days.size;
+  $("#streakBlocks").textContent=total;
+  const pct=Math.min(days.size/20*100,100);
+  $("#streakBar").style.width=pct+"%";
+  $("#streakNote").textContent = days.size>=20
+    ? "20 days done. You've built the muscle — keep it only as long as it stays useful, not compulsive."
+    : `${20-days.size} day${20-days.size===1?"":"s"} to go in Phase 1. Missing a block is fine — just see it, don't grade it.`;
+}
+
+function renderCatMgr(){
+  const mgr=$("#catMgr");
+  mgr.innerHTML=state.categories.map(c=>`<div class="catitem">
+    <span class="dot" style="background:${c.color}"></span>
+    <span class="nm">${c.emoji} ${esc(c.name)}</span>
+    <button data-rmcat="${c.id}" aria-label="Remove">×</button></div>`).join("");
+  mgr.querySelectorAll("[data-rmcat]").forEach(b=>b.onclick=()=>{
+    if(state.categories.length<=2){ toast("Keep at least two buckets"); return; }
+    state.categories=state.categories.filter(c=>c.id!==b.dataset.rmcat);
+    save(); renderAll();
+  });
+}
+
+function renderHourSelects(){
+  for(const [sel,val] of [["#wakeSel",state.settings.wake],["#sleepSel",state.settings.sleep]]){
+    const el=$(sel); el.innerHTML="";
+    for(let h=0;h<=23;h++){ const o=document.createElement("option"); o.value=h; o.textContent=pad(h)+":00"; if(h===val)o.selected=true; el.appendChild(o); }
+  }
+}
+
+function renderAll(){ buildBlockOptions(); renderRecent(); renderTimeline(); renderInsights(); renderStreak(); renderCatMgr(); }
+
+// ---- change a logged block's bucket ----
+function openBucket(id){
+  const e=state.entries.find(x=>x.id===id); if(!e) return;
+  $("#bsSub").textContent=e.text;
+  const wrap=$("#bsChips"); wrap.innerHTML="";
+  state.categories.forEach(c=>{
+    const b=document.createElement("button");
+    b.className="chip"+(e.category===c.id?" sel":"");
+    b.innerHTML=`<span class="dot" style="background:${c.color}"></span>${c.emoji} ${esc(c.name)}`;
+    b.onclick=()=>{ e.category=c.id; save(); closeBucket(); renderAll(); toast("Moved → "+c.name); };
+    wrap.appendChild(b);
+  });
+  $("#bsheet").classList.add("open"); document.body.classList.add("noscroll");
+}
+function closeBucket(){ $("#bsheet").classList.remove("open"); document.body.classList.remove("noscroll"); }
+
+// ---- helpers ----
+function esc(s){ return (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+let toastT;
+function toast(msg, actLabel, actFn){
+  const t=$("#toast"); t.innerHTML="";
+  const sp=document.createElement("span"); sp.textContent=msg; t.appendChild(sp);
+  if(actLabel){
+    const b=document.createElement("button"); b.className="toast-act"; b.textContent=actLabel;
+    b.onclick=()=>{ if(actFn) actFn(); t.classList.remove("show"); };
+    t.appendChild(b);
+  }
+  t.classList.add("show"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"), actLabel?3400:1600);
+}
+
+function switchTab(name){
+  $$(".tab").forEach(s=>s.classList.toggle("active", s.id==="tab-"+name));
+  $$("nav.tabbar button").forEach(b=>b.classList.toggle("on", b.dataset.tab===name));
+  if(name==="today") renderTimeline();
+  if(name==="insights"){ renderInsights(); renderStreak(); }
+  if(name==="more") renderCatMgr();
+  if(name==="log") buildBlockOptions(true); // re-point the block at "now"
+  $("#fab").style.display = name==="more" ? "none" : "grid";
+  window.scrollTo({top:0,behavior:"smooth"});
+}
+
+// ===== events =====
+$$("nav.tabbar button").forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
+
+$("#logText").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("#saveBtn").click(); } });
+
+$("#saveBtn").onclick=()=>{
+  const txt=$("#logText").value.trim();
+  if(!txt){ toast("Say what you did first"); $("#logText").focus(); return; }
+  const cat = categorize(txt);
+  addEntry(selectedWhen(), txt, cat);
+  $("#logText").value="";
+  const sel=$("#blockSel"); if(sel.selectedIndex < sel.options.length-1) sel.selectedIndex++;
+  renderAll();
+  toast(cat?("Logged → "+catById(cat).name):"Logged");
+};
+
+$("#bsCancel").onclick=closeBucket;
+$("#bsheet").onclick=ev=>{ if(ev.target===$("#bsheet")) closeBucket(); };
+
+$("#rangeSeg").querySelectorAll("button").forEach(b=>b.onclick=()=>{
+  curRange=b.dataset.r;
+  $("#rangeSeg").querySelectorAll("button").forEach(x=>x.classList.toggle("on",x===b));
+  renderInsights();
+});
+
+$("#bulkBtn").onclick=()=>{
+  const raw=$("#bulkText").value;
+  const parsed=parseBulk(raw);
+  if(!parsed.length){ toast("Nothing to add"); return; }
+  parsed.forEach(p=>addEntry(p.when,p.text,p.category));
+  $("#bulkText").value="";
+  renderAll(); switchTab("today");
+  toast("Added "+parsed.length+" block"+(parsed.length>1?"s":""));
+};
+
+$("#addCatBtn").onclick=()=>{
+  const v=$("#newCat").value.trim(); if(!v) return;
+  const id=v.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,20)+"-"+Math.random().toString(36).slice(2,5);
+  state.categories.push({id, name:v.slice(0,16), emoji:"•", color:PALETTE[state.categories.length%PALETTE.length]});
+  $("#newCat").value=""; save(); renderAll();
+};
+
+$("#wakeSel").onchange=e=>{ state.settings.wake=+e.target.value; save(); buildBlockOptions(); renderTimeline(); };
+$("#sleepSel").onchange=e=>{ state.settings.sleep=+e.target.value; save(); buildBlockOptions(); renderTimeline(); };
+
+// export / import (API key intentionally excluded — it's stored separately)
+function download(name, text, type){
+  const blob=new Blob([text],{type}); const url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),500);
+}
+$("#expJson").onclick=()=>download("trace-backup-"+dayKey(new Date())+".json", JSON.stringify(state,null,2), "application/json");
+$("#expCsv").onclick=()=>{
+  const rows=[["date","time","what","bucket"]].concat(
+    state.entries.slice().sort((a,b)=>a.ts.localeCompare(b.ts)).map(e=>{
+      const d=new Date(e.ts);
+      return [dayKey(d), blkLabel(d), '"'+(e.text||"").replace(/"/g,'""')+'"', catById(e.category).name];
+    }));
+  download("trace-log-"+dayKey(new Date())+".csv", rows.map(r=>r.join(",")).join("\n"), "text/csv");
+};
+$("#impBtn").onclick=()=>$("#impFile").click();
+$("#impFile").onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{ try{
+    const s=JSON.parse(r.result);
+    if(!Array.isArray(s.entries)) throw 0;
+    state=s; state.categories=state.categories&&state.categories.length?state.categories:DEFAULT_CATS.slice();
+    state.settings=state.settings||{wake:7,sleep:23};
+    save(); renderHourSelects(); renderAll(); toast("Imported");
+  }catch(err){ toast("That file didn't look right"); } };
+  r.readAsText(f);
+};
+$("#clearBtn").onclick=()=>{
+  if(confirm("Erase every logged block on this device? This can't be undone.")){
+    state={entries:[],categories:DEFAULT_CATS.slice(),settings:state.settings};
+    save(); renderHourSelects(); renderAll(); toast("Cleared");
+  }
+};
+
+// ---- inline dictation (free, Web Speech) ----
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const micBtn=$("#micBtn");
+if(SR){
+  let rec=null, listening=false;
+  micBtn.onclick=()=>{
+    if(listening){ rec && rec.stop(); return; }
+    rec=new SR(); rec.lang="en-US"; rec.interimResults=true; rec.continuous=false;
+    let finalTxt="";
+    rec.onstart=()=>{ listening=true; micBtn.classList.add("live"); };
+    rec.onerror=()=>{ toast("Mic unavailable — type or use the keyboard mic"); };
+    rec.onend=()=>{ listening=false; micBtn.classList.remove("live"); };
+    rec.onresult=(ev)=>{
+      let interim="";
+      for(let i=ev.resultIndex;i<ev.results.length;i++){
+        const r=ev.results[i]; if(r.isFinal) finalTxt+=r[0].transcript; else interim+=r[0].transcript;
+      }
+      $("#logText").value=(finalTxt+interim).replace(/^\s+/,"");
+    };
+    rec.start();
+  };
+}else{
+  micBtn.title="Use your keyboard's mic to dictate";
+  micBtn.onclick=()=>toast("Tap the 🎤 on your keyboard to dictate");
+}
+
+/* =========================================================
+   ChatGPT voice assistant  (OpenAI: Whisper + Chat + TTS)
+   ========================================================= */
+const TOOLS = [
+  { type:"function", function:{
+    name:"log_entries",
+    description:"Record one or more things the user did into their 30-minute time log. Use the user's local timezone. Each entry is one ~30-minute block; if an activity lasted longer, split it across consecutive blocks. If the user gives no time, omit 'time' (defaults to the current block).",
+    parameters:{ type:"object", properties:{
+      entries:{ type:"array", items:{ type:"object", properties:{
+        time:{ type:"string", description:"Start time as HH:MM in 24h local time, snapped to :00 or :30. Optional." },
+        activity:{ type:"string", description:"Short description of what they did." },
+        bucket:{ type:"string", description:"One of the user's bucket ids. Optional; auto-detected if omitted." }
+      }, required:["activity"] } }
+    }, required:["entries"] }
+  }},
+  { type:"function", function:{
+    name:"get_summary",
+    description:"Get a breakdown of how the user has spent their logged time, by bucket, for a range.",
+    parameters:{ type:"object", properties:{
+      range:{ type:"string", enum:["today","7","all"], description:"today, last 7 days, or all time" }
+    }, required:["range"] }
+  }}
+];
+
+function systemPrompt(){
+  const now=new Date();
+  const buckets=state.categories.map(c=>c.id+" ("+c.name+")").join(", ");
+  return [
+    'You are the friendly voice assistant inside "Trace", a personal 30-minute time-audit app.',
+    'Current local time is '+blkLabel(now)+' on '+now.toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric"})+'. The user\'s waking day runs '+pad(state.settings.wake)+':00 to '+pad(state.settings.sleep)+':00.',
+    'Buckets (use the id when logging): '+buckets+'.',
+    'When the user tells you what they did, call log_entries to record it. Choose the best bucket id, or omit bucket to let the app auto-sort. If they give no time, omit it.',
+    'When the user asks how they spent their time, call get_summary, then answer in one or two short spoken sentences with real numbers.',
+    'Keep every reply short, warm and non-judgmental — this is about awareness, not grading. Briefly confirm what you logged. Never lecture or moralize.'
+  ].join(" ");
+}
+
+function execLog(entries){
+  let added=0, seq=0; const base=snap(new Date()); const done=[];
+  (entries||[]).forEach(en=>{
+    if(!en || !en.activity) return;
+    let when;
+    if(en.time && /^\d{1,2}:\d{2}$/.test(en.time)){ const [h,m]=en.time.split(":").map(Number); when=snap(blkStart(h,m)); }
+    else { when=new Date(base.getTime()+seq*30*60000); seq++; }
+    let cat=(en.bucket && state.categories.some(c=>c.id===en.bucket)) ? en.bucket : categorize(en.activity);
+    addEntry(when, en.activity, cat);
+    added++; done.push({time:blkLabel(snap(when)), activity:en.activity, bucket:catById(cat).name});
+  });
+  renderAll();
+  return {logged:added, entries:done};
+}
+
+// --- assistant session state ---
+let vMessages=[];
+let recActive=false, mediaStream=null, mediaRec=null, recChunks=[], audioCtx=null, vadRAF=null, ttsAudio=null;
+
+function setStatus(t){ $("#vStatus").textContent=t; }
+function setOrb(s){ const o=$("#vOrb"); o.classList.remove("listening","thinking","speaking"); if(s&&s!=="idle") o.classList.add(s); }
+function orbDisabled(b){ $("#vOrb").disabled=!!b; }
+function addBubble(role, text){
+  const log=$("#vLog");
+  const d=document.createElement("div"); d.className="vbubble "+role; d.textContent=text;
+  log.appendChild(d); log.scrollTop=log.scrollHeight;
+}
+
+function openAssistant(){
+  $("#vsheet").classList.add("open");
+  document.body.classList.add("noscroll");
+  vMessages=[{role:"system", content:systemPrompt()}];
+  if(!aiCfg.key) vNoKey(); else vGreet();
+}
+function closeAssistant(){
+  $("#vsheet").classList.remove("open");
+  document.body.classList.remove("noscroll");
+  abortRecording(); stopSpeaking(); setOrb("idle");
+}
+function vNoKey(){
+  $("#vLog").innerHTML =
+    '<div class="vsetup">'+
+      '<div class="vsetup-ic">🎙️</div>'+
+      '<h3>Talk to Trace</h3>'+
+      '<p>Add your OpenAI API key to log your time by voice and ask where it went. The key is stored only on this device.</p>'+
+      '<button class="primary" id="vGoKey">Add API key</button>'+
+      '<a class="vlink" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">Get a key →</a>'+
+    '</div>';
+  $("#vGoKey").onclick=()=>{ closeAssistant(); switchTab("more"); setTimeout(()=>{ const el=$("#aiKey"); if(el){ el.scrollIntoView({behavior:"smooth",block:"center"}); el.focus(); } },280); };
+  setStatus(""); orbDisabled(true);
+}
+function vGreet(){
+  $("#vLog").innerHTML="";
+  addBubble("assistant","Hey — tell me what you just did, or ask where your time went today.");
+  setStatus("Tap to talk"); setOrb("idle"); orbDisabled(false);
+}
+
+$("#fab").onclick=openAssistant;
+$("#vClose").onclick=closeAssistant;
+$("#vOrb").onclick=()=>{
+  if(!aiCfg.key){ vNoKey(); return; }
+  if(recActive){ stopRecording(); return; }
+  if(ttsAudio){ stopSpeaking(); }
+  startRecording();
+};
+
+// --- recording with simple voice-activity auto-stop ---
+async function startRecording(){
+  if(recActive) return;
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    setStatus("Mic needs a secure (https) page"); return;
+  }
+  try{ mediaStream = await navigator.mediaDevices.getUserMedia({audio:true}); }
+  catch(e){ setStatus("Allow microphone access to talk"); return; }
+  stopSpeaking();
+  recChunks=[];
+  let mime="";
+  if(window.MediaRecorder){
+    if(MediaRecorder.isTypeSupported("audio/webm")) mime="audio/webm";
+    else if(MediaRecorder.isTypeSupported("audio/mp4")) mime="audio/mp4";
+  }
+  try{ mediaRec = mime ? new MediaRecorder(mediaStream,{mimeType:mime}) : new MediaRecorder(mediaStream); }
+  catch(e){ mediaRec = new MediaRecorder(mediaStream); }
+  mediaRec.ondataavailable=ev=>{ if(ev.data&&ev.data.size) recChunks.push(ev.data); };
+  mediaRec.onstop=()=>{
+    const type=(mediaRec&&mediaRec.mimeType)||mime||"audio/webm";
+    const blob=new Blob(recChunks,{type});
+    cleanupRec();
+    if(blob.size>1500) handleAudio(blob, type);
+    else { setOrb("idle"); setStatus("Tap to talk"); }
+  };
+  mediaRec.start();
+  recActive=true; setOrb("listening"); setStatus("Listening… tap to send");
+  startVAD();
+}
+function startVAD(){
+  try{
+    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    const src=audioCtx.createMediaStreamSource(mediaStream);
+    const an=audioCtx.createAnalyser(); an.fftSize=512; src.connect(an);
+    const buf=new Uint8Array(an.fftSize);
+    let started=false, lastVoice=Date.now(), t0=Date.now();
+    const loop=()=>{
+      if(!recActive) return;
+      an.getByteTimeDomainData(buf);
+      let sum=0; for(let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum+=v*v; }
+      const rms=Math.sqrt(sum/buf.length); const now=Date.now();
+      if(rms>0.045){ started=true; lastVoice=now; }
+      if((started && now-lastVoice>1300) || now-t0>20000){ stopRecording(); return; }
+      vadRAF=requestAnimationFrame(loop);
+    };
+    vadRAF=requestAnimationFrame(loop);
+  }catch(e){ /* VAD is optional; manual tap still stops */ }
+}
+function stopRecording(){
+  if(!recActive) return;
+  recActive=false;
+  if(vadRAF) cancelAnimationFrame(vadRAF);
+  try{ if(mediaRec && mediaRec.state!=="inactive") mediaRec.stop(); }catch(e){}
+  setOrb("thinking"); setStatus("Thinking…");
+}
+function abortRecording(){
+  if(!recActive) return;
+  recActive=false; if(vadRAF) cancelAnimationFrame(vadRAF);
+  try{ if(mediaRec && mediaRec.state!=="inactive") mediaRec.stop(); }catch(e){}
+  cleanupRec();
+}
+function cleanupRec(){
+  if(mediaStream){ mediaStream.getTracks().forEach(t=>t.stop()); mediaStream=null; }
+  if(audioCtx){ try{audioCtx.close();}catch(e){} audioCtx=null; }
+}
+
+async function handleAudio(blob, type){
+  setOrb("thinking"); setStatus("Transcribing…");
+  let text="";
+  try{ text=await transcribe(blob, type); }
+  catch(e){ setOrb("idle"); setStatus("Tap to talk"); addBubble("err","⚠️ "+(e.message||"Transcription failed")); return; }
+  text=(text||"").trim();
+  if(!text){ setOrb("idle"); setStatus("Didn't catch that — tap to talk"); return; }
+  addBubble("user", text);
+  vMessages.push({role:"user", content:text});
+  await runAssistant();
+}
+
+async function runAssistant(){
+  setOrb("thinking"); setStatus("Thinking…");
+  try{
+    for(let round=0; round<5; round++){
+      const msg=await chatComplete(vMessages);
+      if(msg.tool_calls && msg.tool_calls.length){
+        vMessages.push({role:"assistant", content:msg.content||null, tool_calls:msg.tool_calls});
+        for(const tc of msg.tool_calls){
+          let res;
+          try{
+            const args=JSON.parse(tc.function.arguments||"{}");
+            if(tc.function.name==="log_entries") res=execLog(args.entries||[]);
+            else if(tc.function.name==="get_summary") res=aggregate(args.range||"today");
+            else res={error:"unknown tool"};
+          }catch(e){ res={error:String(e&&e.message||e)}; }
+          vMessages.push({role:"tool", tool_call_id:tc.id, content:JSON.stringify(res)});
+        }
+        continue;
+      }
+      vMessages.push({role:"assistant", content:msg.content||""});
+      const text=(msg.content||"").trim();
+      if(text){ addBubble("assistant", text); await speak(text); }
+      break;
+    }
+  }catch(e){
+    addBubble("err","⚠️ "+(e.message||"Something went wrong"));
+  }
+  setOrb("idle"); setStatus("Tap to talk"); trimMessages();
+}
+
+function trimMessages(){
+  if(vMessages.length<=20) return;
+  const sys=vMessages[0];
+  let tail=vMessages.slice(-16);
+  while(tail.length && tail[0].role!=="user") tail.shift();
+  vMessages=[sys].concat(tail);
+}
+
+async function errMsg(r){
+  let m="HTTP "+r.status;
+  try{ const j=await r.json(); if(j.error&&j.error.message) m=j.error.message; }catch(e){}
+  if(r.status===401) m="Invalid API key — check it in More → Voice assistant.";
+  if(r.status===429) m="Rate limited or out of credit on your OpenAI account.";
+  return m;
+}
+async function transcribe(blob, type){
+  const ext = type.includes("mp4")?"mp4":(type.includes("webm")?"webm":"wav");
+  const fd=new FormData();
+  fd.append("file", blob, "audio."+ext);
+  fd.append("model", AI.transcribe);
+  const r=await fetch("https://api.openai.com/v1/audio/transcriptions",{
+    method:"POST", headers:{Authorization:"Bearer "+aiCfg.key}, body:fd
+  });
+  if(!r.ok) throw new Error(await errMsg(r));
+  return (await r.json()).text;
+}
+async function chatComplete(messages){
+  const r=await fetch("https://api.openai.com/v1/chat/completions",{
+    method:"POST",
+    headers:{Authorization:"Bearer "+aiCfg.key,"Content-Type":"application/json"},
+    body:JSON.stringify({model:AI.chat, messages, tools:TOOLS, tool_choice:"auto", temperature:0.3})
+  });
+  if(!r.ok) throw new Error(await errMsg(r));
+  return (await r.json()).choices[0].message;
+}
+async function speak(text){
+  if(!aiCfg.key) return;
+  try{
+    setOrb("speaking"); setStatus("Speaking…");
+    const r=await fetch("https://api.openai.com/v1/audio/speech",{
+      method:"POST",
+      headers:{Authorization:"Bearer "+aiCfg.key,"Content-Type":"application/json"},
+      body:JSON.stringify({model:AI.tts, voice:aiCfg.voice||"nova", input:text})
+    });
+    if(!r.ok) return; // skip audio silently; text reply is already shown
+    const blob=await r.blob();
+    stopSpeaking();
+    ttsAudio=new Audio(URL.createObjectURL(blob));
+    await ttsAudio.play().catch(()=>{});
+    await new Promise(res=>{ ttsAudio.onended=res; ttsAudio.onerror=res; });
+  }catch(e){ /* audio is best-effort */ }
+}
+function stopSpeaking(){ if(ttsAudio){ try{ttsAudio.pause();}catch(e){} ttsAudio=null; } }
+
+// ---- voice settings (More tab) ----
+function populateVoices(){
+  const el=$("#aiVoice"); el.innerHTML="";
+  VOICES.forEach(v=>{ const o=document.createElement("option"); o.value=v; o.textContent=v[0].toUpperCase()+v.slice(1); if(v===aiCfg.voice)o.selected=true; el.appendChild(o); });
+}
+function refreshAIStatus(){
+  const s=$("#aiStatus");
+  if(aiCfg.key){ s.textContent="Connected ✓"; s.style.color="var(--good)"; }
+  else { s.textContent="Not connected"; s.style.color="var(--muted)"; }
+  $("#aiKey").placeholder = aiCfg.key ? "•••••••• saved — paste a new key to replace" : "sk-...";
+}
+$("#aiSave").onclick=()=>{
+  const v=$("#aiKey").value.trim();
+  if(!v){ toast("Paste a key first"); return; }
+  aiCfg.key=v; saveAI(); $("#aiKey").value=""; refreshAIStatus(); toast("Key saved ✓");
+};
+$("#aiClear").onclick=()=>{ aiCfg.key=""; $("#aiKey").value=""; saveAI(); refreshAIStatus(); toast("Key removed"); };
+$("#aiVoice").onchange=e=>{ aiCfg.voice=e.target.value; saveAI(); };
+
+// ---- clock ----
+function tick(){
+  const d=new Date();
+  $("#clkTime").textContent=pad(d.getHours())+":"+pad(d.getMinutes());
+  $("#clkDate").textContent=d.toLocaleDateString(undefined,{weekday:"short",day:"numeric",month:"short"});
+}
+setInterval(tick,15000); tick();
+
+// keep the time block pointed at "now" when you reopen the app
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden) buildBlockOptions(true); });
+
+// ---- boot ----
+renderHourSelects();
+populateVoices();
+refreshAIStatus();
+renderAll();
+</script>
+</body>
+</html>
