@@ -92,16 +92,16 @@
   .chip.sel{border-color:var(--text);background:#ffffff16;font-weight:600}
 
   /* square bucket tiles */
-  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:4px}
-  .tile{aspect-ratio:1/1;min-height:64px;border:1px solid var(--line);background:var(--card2);border-radius:var(--r-sm);
-    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;cursor:pointer;padding:5px 3px;position:relative;
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:4px}
+  .tile{aspect-ratio:1.18/1;min-height:50px;border:1px solid var(--line);background:var(--card2);border-radius:var(--r-sm);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer;padding:4px 3px;position:relative;
     transition:transform .05s ease,border-color .15s,background .15s}
   .tile:active{transform:scale(.94)}
-  .tile .em{font-size:20px;line-height:1}
-  .tile .lb{font-size:9.5px;color:var(--muted);text-align:center;line-height:1.12;letter-spacing:.1px}
+  .tile .em{font-size:17px;line-height:1}
+  .tile .lb{font-size:8.5px;color:var(--muted);text-align:center;line-height:1.1;letter-spacing:.1px}
   .tile.sel{border-color:var(--text);background:#ffffff16}
   .tile.sel .lb{color:var(--text);font-weight:600}
-  .tile .accent{position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%}
+  .tile .accent{position:absolute;top:4px;right:4px;width:5px;height:5px;border-radius:50%}
 
   /* voice transcript */
   .copybtn{flex:0 0 auto;background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:999px;
@@ -109,6 +109,30 @@
   .copybtn:active{background:var(--card3)}
   .transcript-text{background:var(--card2);border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 14px;margin-top:12px;
     font-size:15px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;-webkit-user-select:text;user-select:text}
+
+  /* bigger, more prominent time block */
+  select#blockSel{font-size:19px;font-weight:600;padding-top:15px;padding-bottom:15px}
+
+  /* today day navigation */
+  .daynav{display:flex;align-items:center;gap:10px}
+  .daynav-mid{flex:1;text-align:center;min-width:0}
+  .daybtn{flex:0 0 auto;width:38px;height:38px;border-radius:50%;border:1px solid var(--line);background:var(--card2);color:var(--text);font-size:20px;line-height:1;cursor:pointer;display:grid;place-items:center;transition:background .15s}
+  .daybtn:active{background:var(--card3)}
+  .daybtn[disabled]{opacity:.3;cursor:default}
+
+  /* 7-day heatmap */
+  .hm{display:flex;flex-direction:column;gap:4px}
+  .hm-row{display:grid;grid-template-columns:26px repeat(7,1fr);gap:4px;align-items:center}
+  .hm-label{font-size:15px;text-align:center}
+  .hm-dh{font-size:10px;color:var(--muted2);text-align:center}
+  .hm-cell{aspect-ratio:1/1;min-height:20px;display:grid;place-items:center}
+  .hm-sq{width:100%;height:100%;border-radius:5px;background:var(--card2)}
+
+  /* weekly targets manager */
+  .trow{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .trow .tnm{flex:1;font-size:13.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .trow select.tsel{width:74px;flex:0 0 auto;padding:9px 22px 9px 10px;font-size:14px;background-position:right 8px center}
+  .trow input.tinp{width:72px;flex:0 0 auto;padding:9px 8px;font-size:14px;text-align:center}
 
   button.primary{
     width:100%;margin-top:16px;border:none;border-radius:var(--r-sm);padding:15px;
@@ -246,7 +270,7 @@
   <section class="tab active" id="tab-log">
     <div class="card">
       <h2>What did you just do?</h2>
-      <p class="sub">Speak it or type it — Trace sorts it into a bucket automatically. Tap a bucket icon on Today to change it.</p>
+      <p class="sub" id="logProgress">—</p>
 
       <label class="fld">Time block</label>
       <select id="blockSel"></select>
@@ -288,9 +312,16 @@
   <!-- TODAY -->
   <section class="tab" id="tab-today">
     <div class="card">
-      <h2 id="todayHead">Today</h2>
-      <p class="sub" id="todaySub">Your day, in 30-minute blocks. Tap an empty slot to fill it.</p>
-      <div class="tl" id="timeline"></div>
+      <div class="daynav">
+        <button class="daybtn" id="dayPrev" aria-label="Previous day">‹</button>
+        <div class="daynav-mid">
+          <h2 id="todayHead" style="margin:0">Today</h2>
+          <p class="sub" id="todaySub" style="margin:2px 0 0">—</p>
+        </div>
+        <button class="daybtn" id="dayNext" aria-label="Next day">›</button>
+      </div>
+      <p class="note" style="margin:10px 0 0">Tap any block to edit its text or bucket. Tap an empty slot to fill it — even on past days.</p>
+      <div class="tl" id="timeline" style="margin-top:12px"></div>
     </div>
   </section>
 
@@ -309,6 +340,24 @@
         <div class="box"><b id="statTop">—</b><span>biggest pull</span></div>
       </div>
       <div class="brk" id="breakdown" style="margin-top:16px"></div>
+    </div>
+
+    <div class="card" id="ratioCard">
+      <h2>Paycheck vs your real business</h2>
+      <p class="sub">Last 7 days — the trade-off you care about.</p>
+      <div id="ratioBody"></div>
+    </div>
+
+    <div class="card">
+      <h2>Last 7 days</h2>
+      <p class="sub">Where each day went, by bucket. Darker = more time.</p>
+      <div id="heatmap"></div>
+    </div>
+
+    <div class="card">
+      <h2>Weekly targets</h2>
+      <p class="sub">This week vs the goals you set in More → Weekly targets.</p>
+      <div id="targetsBody"></div>
     </div>
 
     <div class="card">
@@ -373,15 +422,24 @@
     </div>
 
     <div class="card">
-      <h2>Backup</h2>
-      <p class="sub">Your log lives only on this device. Export now and then so you never lose it. (Your API key is never included in exports.)</p>
-      <div class="btnrow">
+      <h2>Weekly targets</h2>
+      <p class="sub">Set a weekly goal per bucket — a <b>min</b> to hit (e.g. Trading Biz) or a <b>max</b> to stay under (e.g. Scroll/YT). Progress shows in Insights. Leave blank to ignore.</p>
+      <div class="catmgr" id="targetMgr"></div>
+    </div>
+
+    <div class="card">
+      <h2>Backup &amp; iCloud</h2>
+      <p class="sub">Save a copy to iCloud Drive so your journal is safe and reachable on any device. First time: choose your <b>30M Time Journal</b> folder — iOS remembers it, and each backup updates the same file.</p>
+      <button class="primary" id="icloudBtn">☁&#xFE0E;&nbsp; Back up to iCloud</button>
+      <p class="note" id="lastBackupNote" style="margin:10px 0 0">Never backed up yet.</p>
+      <div class="btnrow" style="margin-top:12px">
         <button class="ghost" id="expJson">Export JSON</button>
         <button class="ghost" id="expCsv">Export CSV</button>
         <button class="ghost" id="impBtn">Import JSON</button>
       </div>
       <input type="file" id="impFile" accept="application/json" style="display:none">
       <div class="btnrow"><button class="ghost" id="clearBtn" style="color:#f87171;border-color:#f8717144">Erase everything</button></div>
+      <p class="note" style="margin-top:8px">On iPhone this opens the share sheet → <b>Save to Files → iCloud Drive → 30M Time Journal</b>. Browsers can't write to iCloud silently, so it's one tap per backup. Use Import to restore on another device. Your API key is never included.</p>
     </div>
 
     <div class="card">
@@ -397,7 +455,7 @@
 <nav class="tabbar">
   <button data-tab="log" class="on"><span class="ic">✏️</span>Log</button>
   <button data-tab="today"><span class="ic">📋</span>Today</button>
-  <button data-tab="insights"><span class="ic">📊</span>Insights</button>
+  <button data-tab="insights"><span class="ic">🔍</span>Insights</button>
   <button data-tab="more"><span class="ic">⚙️</span>More</button>
 </nav>
 
@@ -416,13 +474,19 @@
   </div>
 </div>
 
-<!-- change-bucket sheet -->
+<!-- edit / add block sheet -->
 <div class="bsheet" id="bsheet">
   <div class="bsheet-card">
-    <h2>Move to bucket</h2>
+    <h2 id="bsTitle">Edit block</h2>
     <p class="sub" id="bsSub"></p>
+    <input type="text" id="bsText" placeholder="What happened…" autocomplete="off" enterkeyhint="done" style="margin-top:12px">
+    <label class="fld">Bucket</label>
     <div class="chips" id="bsChips"></div>
-    <button class="ghost" id="bsCancel" style="width:100%;margin-top:14px">Cancel</button>
+    <div class="btnrow" style="margin-top:16px">
+      <button class="ghost" id="bsDelete" style="color:#f87171;border-color:#f8717144;flex:0 0 auto">Delete</button>
+      <button class="primary" id="bsSave" style="margin-top:0;flex:1">Save</button>
+    </div>
+    <button class="ghost" id="bsCancel" style="width:100%;margin-top:8px">Cancel</button>
   </div>
 </div>
 
@@ -498,11 +562,13 @@ function load(){
       } else {
         s.categories = (Array.isArray(s.categories)&&s.categories.length)?s.categories:DEFAULT_CATS.slice();
       }
+      s.targets = (s.targets && typeof s.targets==="object") ? s.targets : {};
       return s;
     }
   }catch(e){}
-  return {entries:[], categories:DEFAULT_CATS.slice(), settings:{wake:7, sleep:23}, catVersion:CAT_VERSION};
+  return {entries:[], categories:DEFAULT_CATS.slice(), settings:{wake:7, sleep:23}, catVersion:CAT_VERSION, targets:{}};
 }
+function dateFromKey(k){ const [y,mo,d]=k.split("-").map(Number); return new Date(y,mo-1,d,12,0,0,0); }
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){ toast("Couldn't save — storage blocked"); } }
 
 function loadAI(){ try{ const j=JSON.parse(localStorage.getItem(AIKEY)); if(j&&typeof j==="object") return {key:j.key||"", voice:j.voice||"nova"}; }catch(e){} return {key:"", voice:"nova"}; }
@@ -602,8 +668,8 @@ function blockRowHTML(d, entry, isNow){
     return `<div class="blk${isNow?' now':''}">
       <span class="t">${blkLabel(d)}</span>
       <span class="bar" style="background:${c.color}"></span>
-      <span class="what">${esc(entry.text)}</span>
-      <span class="cat" data-bucket="${entry.id}" title="Change bucket">${c.emoji}</span>
+      <span class="what" data-edit="${entry.id}">${esc(entry.text)}</span>
+      <span class="cat" data-edit="${entry.id}" title="Edit">${c.emoji}</span>
       <button class="del" data-del="${entry.id}" aria-label="Delete">×</button></div>`;
   }
   return `<div class="blk empty${isNow?' now':''}" data-fill="${d.getHours()}:${d.getMinutes()}">
@@ -612,32 +678,40 @@ function blockRowHTML(d, entry, isNow){
       <span class="what muted">—</span></div>`;
 }
 
+let viewDate=new Date(); viewDate.setHours(12,0,0,0);
 function renderTimeline(){
   const tl=$("#timeline"); const {wake,sleep}=state.settings;
-  const today=dayKey(new Date()); const cur=snap(new Date());
+  const dayK=dayKey(viewDate); const isToday=(dayK===dayKey(new Date())); const cur=snap(new Date());
   const byBlock={};
-  state.entries.filter(e=>dayKey(e.ts)===today).forEach(e=>{
+  state.entries.filter(e=>dayKey(e.ts)===dayK).forEach(e=>{
     const d=new Date(e.ts); const k=d.getHours()+":"+d.getMinutes();
     byBlock[k] = (byBlock[k]||[]).concat(e);
   });
+  // blocks to show = your day window ∪ every block logged that day (∪ the current block, if viewing today)
+  const mins=new Set();
+  for(let h=wake; h<=sleep; h++){ for(const m of [0,30]){ if(h===sleep && m===30) continue; mins.add(h*60+m); } }
+  Object.keys(byBlock).forEach(k=>{ const [h,m]=k.split(":").map(Number); mins.add(h*60+m); });
+  if(isToday) mins.add(cur.getHours()*60+cur.getMinutes());
   let html=""; let filled=0, past=0;
-  for(let h=wake; h<=sleep; h++){
-    for(let m of [0,30]){
-      if(h===sleep && m===30) continue;
-      const d=blkStart(h,m); const isNow=(d.getHours()===cur.getHours()&&d.getMinutes()===cur.getMinutes());
-      const arr=byBlock[h+":"+m];
-      if(d<=cur) past++;
-      if(arr){ filled++; arr.forEach(e=>html+=blockRowHTML(d,e,isNow)); }
-      else html+=blockRowHTML(d,null,isNow);
-    }
+  for(const tot of [...mins].sort((a,b)=>a-b)){
+    const h=Math.floor(tot/60), m=tot%60;
+    const d=blkStart(h,m); const isNow=isToday&&(h===cur.getHours()&&m===cur.getMinutes());
+    const arr=byBlock[h+":"+m];
+    if(!isToday || d<=cur) past++;
+    if(arr){ filled++; arr.forEach(e=>html+=blockRowHTML(d,e,isNow)); }
+    else html+=blockRowHTML(d,null,isNow);
   }
   tl.innerHTML=html;
-  $("#todaySub").textContent = `${filled} blocks logged · ${Math.max(past-filled,0)} slots still blank so far today.`;
-  $("#todayHead").textContent = new Date().toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric"});
+  $("#todaySub").textContent = isToday
+    ? `${filled} logged · ${Math.max(past-filled,0)} blank so far today`
+    : `${filled} block${filled===1?"":"s"} logged`;
+  $("#todayHead").textContent = viewDate.toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric"}) + (isToday?" · Today":"");
+  $("#dayNext").disabled = (dayK>=dayKey(new Date()));
   tl.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>delEntry(b.dataset.del));
-  tl.querySelectorAll("[data-bucket]").forEach(b=>b.onclick=()=>openBucket(b.dataset.bucket));
+  tl.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>openEditor({mode:"edit", id:b.dataset.edit}));
   tl.querySelectorAll("[data-fill]").forEach(b=>b.onclick=()=>{
-    switchTab("log"); $("#blockSel").value=b.dataset.fill; $("#logText").focus();
+    const [h,m]=b.dataset.fill.split(":").map(Number);
+    openEditor({mode:"new", dayKey:dayK, h, m});
   });
 }
 
@@ -650,11 +724,23 @@ function renderRecent(){
     const d=new Date(e.ts); const c=catById(e.category);
     return `<div class="blk"><span class="t">${blkLabel(d)}</span>
       <span class="bar" style="background:${c.color}"></span>
-      <span class="what">${esc(e.text)}</span><span class="cat" data-bucket="${e.id}" title="Change bucket">${c.emoji}</span>
+      <span class="what" data-edit="${e.id}">${esc(e.text)}</span><span class="cat" data-edit="${e.id}" title="Edit">${c.emoji}</span>
       <button class="del" data-del="${e.id}" aria-label="Delete">×</button></div>`;
   }).join("");
   list.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>delEntry(b.dataset.del));
-  list.querySelectorAll("[data-bucket]").forEach(b=>b.onclick=()=>openBucket(b.dataset.bucket));
+  list.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>openEditor({mode:"edit", id:b.dataset.edit}));
+}
+
+function renderLogProgress(){
+  const el=$("#logProgress"); if(!el) return;
+  const {wake,sleep}=state.settings;
+  const today=dayKey(new Date()); const cur=snap(new Date());
+  const filledKeys=new Set(state.entries.filter(e=>dayKey(e.ts)===today).map(e=>{const d=new Date(e.ts);return d.getHours()+":"+d.getMinutes();}));
+  let blank=0;
+  for(let h=wake;h<=sleep;h++){ for(const m of [0,30]){ if(h===sleep&&m===30) continue; if(blkStart(h,m)<=cur && !filledKeys.has(h+":"+m)) blank++; } }
+  el.textContent = filledKeys.size
+    ? `${filledKeys.size} logged today · ${blank} blank so far`
+    : "Nothing logged yet today — capture this block.";
 }
 
 // ---- square bucket tiles (tap to set the bucket for the next log) ----
@@ -719,6 +805,96 @@ function renderInsights(){
       <div class="track"><div class="fill" style="width:${Math.round(n/max*100)}%;background:${c.color}"></div></div>
     </div>`;
   }).join("");
+  renderRatio(); renderHeatmap(); renderTargets();
+}
+
+// ---- 7-day analytics: ratio, heatmap, targets ----
+const REAL_BIZ=["trading","charts","aibuild"]; // "real business" = building your future
+function last7Dates(){ const a=[]; const d=new Date(); d.setHours(12,0,0,0); for(let i=6;i>=0;i--){ const x=new Date(d); x.setDate(d.getDate()-i); a.push(x); } return a; }
+function last7Entries(){ const cut=new Date(); cut.setHours(0,0,0,0); cut.setDate(cut.getDate()-6); return state.entries.filter(e=>new Date(e.ts)>=cut); }
+function fmtH(h){ return (h%1?h.toFixed(1):h)+"h"; }
+function barRow(name,val,pct,color){
+  return `<div class="brkrow"><div class="top"><span class="nm">${name}</span><span class="val">${val}</span></div>
+    <div class="track"><div class="fill" style="width:${Math.max(pct,2)}%;background:${color}"></div></div></div>`;
+}
+function renderRatio(){
+  const el=$("#ratioBody"); if(!el) return;
+  const ents=last7Entries();
+  const pay=ents.filter(e=>e.category==="paycheck").length*0.5;
+  const biz=ents.filter(e=>REAL_BIZ.includes(e.category)).length*0.5;
+  const max=Math.max(pay,biz,1);
+  let msg;
+  if(pay+biz===0) msg="No paycheck or business time logged in the last 7 days yet.";
+  else if(biz===0) msg="All your work time went to the paycheck this week — none to your real business yet.";
+  else if(biz>=pay) msg="Your real business got more time than the paycheck this week. 🔥";
+  else msg="Your real business got "+Math.round(biz/(pay+biz)*100)+"% of your working time this week.";
+  el.innerHTML=`<div class="brk">`+
+    barRow("💼 Paycheck", fmtH(pay), pay/max*100, "#94a3b8")+
+    barRow("💹 Real business <span style='color:var(--muted2);font-weight:400'>· Trading Biz+AI+Charts</span>", fmtH(biz), biz/max*100, "#34d399")+
+    `</div><p class="note" style="margin:12px 0 0">${msg}</p>`;
+}
+function renderHeatmap(){
+  const el=$("#heatmap"); if(!el) return;
+  const days=last7Dates(); const ents=last7Entries();
+  const counts={}; // bucket -> dayKey -> n
+  ents.forEach(e=>{ const b=e.category||"none"; const k=dayKey(e.ts); (counts[b]=counts[b]||{})[k]=(counts[b][k]||0)+1; });
+  const ids=state.categories.map(c=>c.id).filter(id=>counts[id]);
+  if(!ids.length){ el.innerHTML=`<div class="empty-state"><div class="big">🗓️</div>No blocks in the last 7 days yet.</div>`; return; }
+  let maxN=1; Object.values(counts).forEach(m=>Object.values(m).forEach(n=>{ if(n>maxN) maxN=n; }));
+  let html=`<div class="hm"><div class="hm-row"><div class="hm-label"></div>`+
+    days.map(d=>`<div class="hm-dh">${d.toLocaleDateString(undefined,{weekday:"narrow"})}</div>`).join("")+`</div>`;
+  ids.forEach(id=>{
+    const c=catById(id);
+    html+=`<div class="hm-row"><div class="hm-label" title="${esc(c.name)}">${c.emoji}</div>`+
+      days.map(d=>{ const n=(counts[id]||{})[dayKey(d)]||0; const op=(0.25+0.75*(n/maxN)).toFixed(2);
+        return `<div class="hm-cell">`+(n?`<span class="hm-sq" style="background:${c.color};opacity:${op}" title="${fmtH(n*0.5)}"></span>`:`<span class="hm-sq"></span>`)+`</div>`; }).join("")+
+      `</div>`;
+  });
+  el.innerHTML=html+`</div>`;
+}
+function renderTargets(){
+  const el=$("#targetsBody"); if(!el) return;
+  const targets=state.targets||{}; const ids=Object.keys(targets).filter(id=>state.categories.some(c=>c.id===id));
+  if(!ids.length){ el.innerHTML=`<div class="note">No targets set yet — add them in More → Weekly targets.</div>`; return; }
+  const ents=last7Entries(); const hoursBy={}; ents.forEach(e=>{ hoursBy[e.category]=(hoursBy[e.category]||0)+0.5; });
+  el.innerHTML=`<div class="brk">`+ids.map(id=>{
+    const t=targets[id]; const c=catById(id); const act=hoursBy[id]||0;
+    const pct=Math.min(act/t.h*100,100);
+    const good = t.dir==="min" ? act>=t.h : act<=t.h;
+    const color = good ? "var(--good)" : (t.dir==="max" ? "var(--bad)" : c.color);
+    const label = (t.dir==="min"?"min ":"max ")+fmtH(t.h);
+    return `<div class="brkrow"><div class="top">
+      <span class="nm">${c.emoji} ${esc(c.name)} <span style="color:var(--muted2)">(${label})</span></span>
+      <span class="val" style="color:${good?'var(--good)':'var(--muted)'}">${fmtH(act)}${good?" ✓":""}</span></div>
+      <div class="track"><div class="fill" style="width:${Math.max(pct,2)}%;background:${color}"></div></div></div>`;
+  }).join("")+`</div>`;
+}
+function renderTargetMgr(){
+  const el=$("#targetMgr"); if(!el) return;
+  const targets=state.targets||{};
+  el.innerHTML=state.categories.map(c=>{
+    const t=targets[c.id]||{}; const dir=t.dir||"none"; const h=(t.h!=null?t.h:"");
+    return `<div class="trow">
+      <span class="tnm">${c.emoji} ${esc(c.name)}</span>
+      <select class="tsel" data-tid="${c.id}">
+        <option value="none"${dir==="none"?" selected":""}>—</option>
+        <option value="min"${dir==="min"?" selected":""}>min</option>
+        <option value="max"${dir==="max"?" selected":""}>max</option>
+      </select>
+      <input class="tinp" type="number" min="0" step="0.5" inputmode="decimal" placeholder="h/wk" value="${h}" data-tid="${c.id}">
+    </div>`;
+  }).join("");
+  el.querySelectorAll("select.tsel").forEach(s=>s.onchange=()=>setTarget(s.dataset.tid));
+  el.querySelectorAll("input.tinp").forEach(i=>i.onchange=()=>setTarget(i.dataset.tid));
+}
+function setTarget(id){
+  state.targets=state.targets||{};
+  const sel=$(`select.tsel[data-tid="${id}"]`), inp=$(`input.tinp[data-tid="${id}"]`);
+  if(!sel||!inp) return;
+  const dir=sel.value, h=parseFloat(inp.value);
+  if(dir==="none" || !(h>0)) delete state.targets[id];
+  else state.targets[id]={dir, h};
+  save(); renderTargets();
 }
 
 function renderStreak(){
@@ -757,23 +933,54 @@ function renderHourSelects(){
   }
 }
 
-function renderAll(){ buildBlockOptions(); renderTiles(); renderRecent(); renderTranscript(); renderTimeline(); renderInsights(); renderStreak(); renderCatMgr(); }
+function renderAll(){ buildBlockOptions(); renderLogProgress(); renderTiles(); renderRecent(); renderTranscript(); renderTimeline(); renderInsights(); renderStreak(); renderCatMgr(); renderTargetMgr(); }
 
-// ---- change a logged block's bucket ----
-function openBucket(id){
-  const e=state.entries.find(x=>x.id===id); if(!e) return;
-  $("#bsSub").textContent=e.text;
+// ---- edit an existing block, or add/backfill a new one ----
+let editCtx=null;
+function openEditor(ctx){
+  editCtx=ctx;
+  const isEdit=ctx.mode==="edit";
+  let when;
+  if(isEdit){
+    const e=state.entries.find(x=>x.id===ctx.id); if(!e){ editCtx=null; return; }
+    editCtx.tmpBucket=e.category||null; when=new Date(e.ts); $("#bsText").value=e.text;
+  } else {
+    editCtx.tmpBucket=null; const d=dateFromKey(ctx.dayKey); d.setHours(ctx.h,ctx.m,0,0); when=d; $("#bsText").value="";
+  }
+  $("#bsTitle").textContent = isEdit ? "Edit block" : "Add block";
+  $("#bsSub").textContent = blkRange12(snap(when)) + " · " + when.toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"});
+  $("#bsDelete").style.display = isEdit ? "" : "none";
+  renderEditorChips();
+  $("#bsheet").classList.add("open"); document.body.classList.add("noscroll");
+  setTimeout(()=>{ const t=$("#bsText"); if(t) t.focus(); },60);
+}
+function renderEditorChips(){
   const wrap=$("#bsChips"); wrap.innerHTML="";
   state.categories.forEach(c=>{
     const b=document.createElement("button");
-    b.className="chip"+(e.category===c.id?" sel":"");
+    b.className="chip"+(editCtx&&editCtx.tmpBucket===c.id?" sel":"");
     b.innerHTML=`<span class="dot" style="background:${c.color}"></span>${c.emoji} ${esc(c.name)}`;
-    b.onclick=()=>{ e.category=c.id; save(); closeBucket(); renderAll(); toast("Moved → "+c.name); };
+    b.onclick=()=>{ editCtx.tmpBucket=(editCtx.tmpBucket===c.id?null:c.id); renderEditorChips(); };
     wrap.appendChild(b);
   });
-  $("#bsheet").classList.add("open"); document.body.classList.add("noscroll");
 }
-function closeBucket(){ $("#bsheet").classList.remove("open"); document.body.classList.remove("noscroll"); }
+function closeEditor(){ $("#bsheet").classList.remove("open"); document.body.classList.remove("noscroll"); editCtx=null; }
+$("#bsCancel").onclick=closeEditor;
+$("#bsheet").onclick=ev=>{ if(ev.target===$("#bsheet")) closeEditor(); };
+$("#bsDelete").onclick=()=>{ if(editCtx&&editCtx.mode==="edit"){ const id=editCtx.id; closeEditor(); delEntry(id); } };
+$("#bsText").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("#bsSave").click(); } });
+$("#bsSave").onclick=()=>{
+  if(!editCtx) return;
+  const txt=$("#bsText").value.trim();
+  if(!txt){ toast("Say what happened first"); $("#bsText").focus(); return; }
+  if(editCtx.mode==="edit"){
+    const e=state.entries.find(x=>x.id===editCtx.id); if(!e){ closeEditor(); return; }
+    e.text=txt; e.category=editCtx.tmpBucket||categorize(txt); save(); closeEditor(); renderAll(); toast("Saved");
+  } else {
+    const d=dateFromKey(editCtx.dayKey); d.setHours(editCtx.h,editCtx.m,0,0);
+    addEntry(d, txt, editCtx.tmpBucket||categorize(txt)); closeEditor(); renderAll(); toast("Added");
+  }
+};
 
 // ---- helpers ----
 function esc(s){ return (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
@@ -792,16 +999,18 @@ function toast(msg, actLabel, actFn){
 function switchTab(name){
   $$(".tab").forEach(s=>s.classList.toggle("active", s.id==="tab-"+name));
   $$("nav.tabbar button").forEach(b=>b.classList.toggle("on", b.dataset.tab===name));
-  if(name==="today") renderTimeline();
+  if(name==="today"){ viewDate=new Date(); viewDate.setHours(12,0,0,0); renderTimeline(); }
   if(name==="insights"){ renderInsights(); renderStreak(); }
-  if(name==="more") renderCatMgr();
-  if(name==="log") buildBlockOptions(true); // re-point the block at "now"
+  if(name==="more"){ renderCatMgr(); renderTargetMgr(); refreshBackupNote(); }
+  if(name==="log"){ buildBlockOptions(true); renderLogProgress(); } // re-point the block at "now"
   $("#fab").style.display = name==="more" ? "none" : "grid";
   window.scrollTo({top:0,behavior:"smooth"});
 }
 
 // ===== events =====
 $$("nav.tabbar button").forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
+$("#dayPrev").onclick=()=>{ viewDate.setDate(viewDate.getDate()-1); renderTimeline(); };
+$("#dayNext").onclick=()=>{ const t=new Date(); t.setHours(12,0,0,0); if(dayKey(viewDate)>=dayKey(t)) return; viewDate.setDate(viewDate.getDate()+1); renderTimeline(); };
 
 $("#logText").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("#saveBtn").click(); } });
 
@@ -831,9 +1040,6 @@ $("#copyTranscript").onclick=async()=>{
   }
   toast(ok?"Copied ✓":"Couldn't copy — select the text");
 };
-
-$("#bsCancel").onclick=closeBucket;
-$("#bsheet").onclick=ev=>{ if(ev.target===$("#bsheet")) closeBucket(); };
 
 $("#rangeSeg").querySelectorAll("button").forEach(b=>b.onclick=()=>{
   curRange=b.dataset.r;
@@ -885,16 +1091,65 @@ $("#impFile").onchange=e=>{
     if(!Array.isArray(s.entries)) throw 0;
     state=s; state.categories=state.categories&&state.categories.length?state.categories:DEFAULT_CATS.slice();
     state.settings=state.settings||{wake:7,sleep:23};
+    state.targets=(state.targets&&typeof state.targets==="object")?state.targets:{};
     save(); renderHourSelects(); renderAll(); toast("Imported");
   }catch(err){ toast("That file didn't look right"); } };
   r.readAsText(f);
 };
 $("#clearBtn").onclick=()=>{
   if(confirm("Erase every logged block on this device? This can't be undone.")){
-    state={entries:[],categories:DEFAULT_CATS.slice(),settings:state.settings};
+    state={entries:[],categories:DEFAULT_CATS.slice(),settings:state.settings,catVersion:CAT_VERSION,targets:{}};
     save(); renderHourSelects(); renderAll(); toast("Cleared");
   }
 };
+
+// ---- iCloud backup (share sheet → Save to Files → iCloud Drive) ----
+const BKPKEY="trace.backup";
+function loadBkp(){ try{ return JSON.parse(localStorage.getItem(BKPKEY))||{}; }catch(e){ return {}; } }
+function saveBkp(o){ try{ localStorage.setItem(BKPKEY, JSON.stringify(o)); }catch(e){} }
+function timeAgo(iso){
+  if(!iso) return null;
+  const s=Math.max(0,(Date.now()-new Date(iso).getTime())/1000);
+  if(s<60) return "just now";
+  const m=Math.floor(s/60); if(m<60) return m+" min ago";
+  const h=Math.floor(m/60); if(h<24) return h+"h ago";
+  const d=Math.floor(h/24); return d+" day"+(d>1?"s":"")+" ago";
+}
+function refreshBackupNote(){
+  const el=$("#lastBackupNote"); if(!el) return;
+  const b=loadBkp();
+  el.textContent = b.at ? ("Last backed up "+timeAgo(b.at)+" · "+state.entries.length+" blocks on this device")
+                        : "Never backed up yet — tap above to save a copy to iCloud.";
+}
+async function backupToICloud(){
+  const name="30M Time Journal.json";
+  const text=JSON.stringify(state,null,2);
+  const file=new File([new Blob([text],{type:"application/json"})], name, {type:"application/json"});
+  let shared=false;
+  try{
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({ files:[file], title:"30M Time Journal", text:"Time journal backup" });
+      shared=true;
+    }
+  }catch(e){
+    if(e && e.name==="AbortError") return;   // user cancelled the share sheet — don't record
+  }
+  if(!shared) download(name, text, "application/json"); // desktop / no share support
+  saveBkp({at:new Date().toISOString(), count:state.entries.length});
+  refreshBackupNote();
+  toast(shared?"Saved — pick your iCloud folder ✓":"Backup downloaded ✓");
+}
+$("#icloudBtn").onclick=backupToICloud;
+
+// gentle nudge when the backup is stale or the log has grown a lot (once per session)
+let nudgedBackup=false;
+function maybeNudgeBackup(){
+  if(nudgedBackup || !state.entries.length) return;
+  const b=loadBkp();
+  const stale = !b.at || (Date.now()-new Date(b.at).getTime() > 2*86400000);
+  const grew  = (state.entries.length - (b.count||0)) >= 20;
+  if(stale || grew){ nudgedBackup=true; toast("Back up your journal to iCloud", "Back up", backupToICloud); }
+}
 
 // ---- inline mic: AI transcription that dictates into the "What happened" box ----
 const micBtn=$("#micBtn");
@@ -1146,6 +1401,8 @@ document.addEventListener("visibilitychange",()=>{ if(!document.hidden) buildBlo
 renderHourSelects();
 refreshAIStatus();
 renderAll();
+refreshBackupNote();
+maybeNudgeBackup();
 </script>
 </body>
 </html>
