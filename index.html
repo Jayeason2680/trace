@@ -8,6 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Trace">
 <meta name="theme-color" content="#0e1014">
+<meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
 <title>Trace — 30-minute time audit</title>
 <style>
   :root{
@@ -55,19 +56,30 @@
     width:100%;background:var(--card2);color:var(--text);border:1px solid var(--line);
     border-radius:var(--r-sm);padding:13px 12px;font-size:16px;font-family:inherit;transition:border-color .15s, box-shadow .15s;
   }
-  select{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238a909d' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>");background-repeat:no-repeat;background-position:right 12px center;padding-right:34px}
+  select{-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNCIgaGVpZ2h0PSIxNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM4YTkwOWQiIHN0cm9rZS13aWR0aD0iMiI+PHBhdGggZD0iTTYgOWw2IDYgNi02Ii8+PC9zdmc+");background-repeat:no-repeat;background-position:right 12px center;background-size:14px 14px;padding-right:34px}
   textarea{min-height:120px;resize:vertical;line-height:1.5}
   input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 
   .inputrow{display:flex;gap:8px;align-items:stretch}
   .inputrow input{flex:1}
   .mic{
-    flex:0 0 auto;width:52px;border:1px solid var(--line);background:var(--card2);
-    border-radius:var(--r-sm);font-size:21px;display:grid;place-items:center;cursor:pointer;color:var(--text);transition:background .15s,border-color .15s
+    flex:0 0 auto;width:54px;border:none;color:#0b0e14;position:relative;
+    background:radial-gradient(circle at 32% 28%,var(--accent-2),var(--accent));
+    border-radius:var(--r-sm);display:grid;place-items:center;cursor:pointer;
+    box-shadow:0 4px 14px #7c9cf533;transition:filter .12s,transform .05s,background .2s
   }
-  .mic.live{background:#ef444422;border-color:#ef4444;animation:pulse 1.1s infinite}
-  .mic[disabled]{opacity:.4}
-  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 #ef444455}50%{box-shadow:0 0 0 7px #ef444400}}
+  .mic:active{transform:scale(.95)}
+  .mic .micicon{width:22px;height:22px;display:block}
+  .mic .spark{position:absolute;top:6px;right:7px;width:9px;height:9px;color:#fff;filter:drop-shadow(0 0 2px #ffffff88)}
+  .mic[disabled]{opacity:.5}
+  .mic.rec{background:radial-gradient(circle at 32% 28%,#fca5a5,#ef4444);color:#fff;animation:micpulse 1.1s infinite}
+  .mic.rec .spark{display:none}
+  @keyframes micpulse{0%,100%{box-shadow:0 0 0 0 #ef444455}50%{box-shadow:0 0 0 8px #ef444400}}
+  .mic.busy{background:radial-gradient(circle at 32% 28%,#fcd34d,#fbbf24);color:#0b0e14}
+  .mic.busy .micicon,.mic.busy .spark{opacity:0}
+  .mic.busy::after{content:"";position:absolute;width:20px;height:20px;border-radius:50%;
+    border:2.5px solid #0b0e1433;border-top-color:#0b0e14;animation:micspin .7s linear infinite}
+  @keyframes micspin{to{transform:rotate(360deg)}}
 
   .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:4px}
   .chip{
@@ -78,6 +90,25 @@
   .chip:active{transform:scale(.95)}
   .chip .dot{width:8px;height:8px;border-radius:50%}
   .chip.sel{border-color:var(--text);background:#ffffff16;font-weight:600}
+
+  /* square bucket tiles */
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:4px}
+  .tile{aspect-ratio:1/1;min-height:64px;border:1px solid var(--line);background:var(--card2);border-radius:var(--r-sm);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;cursor:pointer;padding:5px 3px;position:relative;
+    transition:transform .05s ease,border-color .15s,background .15s}
+  .tile:active{transform:scale(.94)}
+  .tile .em{font-size:20px;line-height:1}
+  .tile .lb{font-size:9.5px;color:var(--muted);text-align:center;line-height:1.12;letter-spacing:.1px}
+  .tile.sel{border-color:var(--text);background:#ffffff16}
+  .tile.sel .lb{color:var(--text);font-weight:600}
+  .tile .accent{position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%}
+
+  /* voice transcript */
+  .copybtn{flex:0 0 auto;background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:999px;
+    padding:7px 13px;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;transition:background .15s}
+  .copybtn:active{background:var(--card3)}
+  .transcript-text{background:var(--card2);border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 14px;margin-top:12px;
+    font-size:15px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;-webkit-user-select:text;user-select:text}
 
   button.primary{
     width:100%;margin-top:16px;border:none;border-radius:var(--r-sm);padding:15px;
@@ -223,8 +254,18 @@
       <label class="fld">What happened</label>
       <div class="inputrow">
         <input type="text" id="logText" placeholder="e.g. scrolled instagram in bed" autocomplete="off" enterkeyhint="done">
-        <button class="mic" id="micBtn" aria-label="Dictate this entry" title="Dictate">🎤</button>
+        <button class="mic" id="micBtn" aria-label="Voice transcribe with AI" title="Voice transcribe (AI)">
+          <svg class="micicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="2.5" width="6" height="11" rx="3"/>
+            <path d="M5 11a7 7 0 0 0 14 0"/>
+            <line x1="12" y1="18" x2="12" y2="21.5"/>
+          </svg>
+          <svg class="spark" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="M6 0 L7 5 L12 6 L7 7 L6 12 L5 7 L0 6 L5 5 Z"/></svg>
+        </button>
       </div>
+
+      <label class="fld">Bucket · tap to set (or let Trace auto-sort)</label>
+      <div class="tiles" id="bucketTiles"></div>
 
       <button class="primary" id="saveBtn">Log it</button>
     </div>
@@ -232,6 +273,15 @@
     <div class="card" id="recentCard">
       <h2>Just logged</h2>
       <div class="tl" id="recentList"></div>
+    </div>
+
+    <div class="card" id="transcriptCard" style="display:none">
+      <div class="row" style="justify-content:space-between;align-items:center;gap:8px">
+        <h2 style="margin:0">Voice transcript</h2>
+        <button class="copybtn" id="copyTranscript" aria-label="Copy transcript"><span>📋</span>Copy</button>
+      </div>
+      <p class="sub" style="margin:8px 0 0">The full text from your last voice entry — copy it anywhere.</p>
+      <div class="transcript-text" id="transcriptText"></div>
     </div>
   </section>
 
@@ -277,8 +327,8 @@
   <!-- MORE -->
   <section class="tab" id="tab-more">
     <div class="card" id="voiceCard">
-      <h2>Voice assistant</h2>
-      <p class="sub">Talk to Trace using ChatGPT — say what you did and it logs it, or ask where your time went. Your key is stored only on this device and used to call OpenAI directly from your phone.</p>
+      <h2>Voice entry</h2>
+      <p class="sub">Dictate your log by voice. Tap the mic, say what you did, and it's transcribed straight into the entry box for you to review. Your key is stored only on this device and used to call OpenAI directly from your phone.</p>
       <label class="fld">OpenAI API key</label>
       <div class="inputrow">
         <input type="password" id="aiKey" placeholder="sk-..." autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -288,10 +338,8 @@
         <span class="note" id="aiStatus">Not connected</span>
         <a class="vlink" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">Get a key →</a>
       </div>
-      <label class="fld">Reply voice</label>
-      <select id="aiVoice"></select>
-      <div class="btnrow"><button class="ghost" id="aiClear" style="color:#f87171;border-color:#f8717144">Remove key</button></div>
-      <p class="note" style="margin-top:8px">Audio you speak is sent to OpenAI for transcription and replies. Standard API usage applies — usually a few cents per session. Needs an internet connection.</p>
+      <div class="btnrow" style="margin-top:12px"><button class="ghost" id="aiClear" style="color:#f87171;border-color:#f8717144">Remove key</button></div>
+      <p class="note" style="margin-top:8px">Only the audio you record is sent to OpenAI, and only for transcription — no chat, no spoken replies. It uses gpt-4o-mini-transcribe (falling back to Whisper), costing a fraction of a cent per entry. Needs an internet connection and a secure (https) page.</p>
     </div>
 
     <div class="card">
@@ -344,7 +392,7 @@
 
 </main>
 
-<button class="fab" id="fab" aria-label="Talk to Trace">🎙️</button>
+<button class="fab" id="fab" aria-label="Voice entry">🎤</button>
 
 <nav class="tabbar">
   <button data-tab="log" class="on"><span class="ic">✏️</span>Log</button>
@@ -353,11 +401,11 @@
   <button data-tab="more"><span class="ic">⚙️</span>More</button>
 </nav>
 
-<!-- voice assistant sheet -->
+<!-- voice entry sheet -->
 <div class="vsheet" id="vsheet">
   <div class="vsheet-inner">
     <div class="vhead">
-      <div class="vt">Trace Assistant<small>powered by ChatGPT</small></div>
+      <div class="vt">Voice entry<small>speak · transcribe · review</small></div>
       <button class="vclose" id="vClose" aria-label="Close">×</button>
     </div>
     <div class="vlog" id="vLog"></div>
@@ -388,38 +436,51 @@ const pad = n => String(n).padStart(2,"0");
 const KEY = "trace.v1";
 const AIKEY = "trace.ai";
 
-// OpenAI model defaults — editable. tts is optional (text still works if it fails).
-const AI = { transcribe:"whisper-1", chat:"gpt-4o-mini", tts:"tts-1" };
-const VOICES = ["nova","alloy","echo","fable","onyx","shimmer"];
+// OpenAI transcription models, tried in order (first that works wins). No chat, no text-to-speech.
+const AI = { transcribe:["gpt-4o-mini-transcribe","whisper-1"] };
 
 const PALETTE = ["#7c9cf5","#34d399","#60a5fa","#f472b6","#fbbf24","#a78bfa","#fb923c","#22d3ee","#f87171","#c084fc","#94a3b8","#facc15","#4ade80","#38bdf8"];
+// buckets, ordered by usual time spent (this order sets the tile grid order)
 const DEFAULT_CATS = [
-  {id:"focus",        name:"Focus",      emoji:"🎯", color:"#7c9cf5"},
-  {id:"trading",      name:"Trading",    emoji:"📈", color:"#34d399"},
-  {id:"learning",     name:"Learning",   emoji:"📚", color:"#60a5fa"},
-  {id:"body",         name:"Body",       emoji:"🏃", color:"#f472b6"},
-  {id:"people",       name:"People",     emoji:"🤝", color:"#fbbf24"},
-  {id:"admin",        name:"Admin",      emoji:"🧹", color:"#a78bfa"},
-  {id:"meals",        name:"Meals",      emoji:"🍽️", color:"#fb923c"},
-  {id:"rest",         name:"Rest",       emoji:"🌙", color:"#22d3ee"},
-  {id:"scrolling",    name:"Scrolling",  emoji:"📱", color:"#f87171"},
-  {id:"entertainment",name:"Entertain",  emoji:"🎬", color:"#c084fc"},
-  {id:"drift",        name:"Drift",      emoji:"🌫️", color:"#94a3b8"}
+  {id:"paycheck",  name:"Paycheck",       emoji:"💼", color:"#94a3b8"},
+  {id:"trading",   name:"Trading Biz",    emoji:"💹", color:"#34d399"},
+  {id:"charts",    name:"Charts",         emoji:"📈", color:"#22d3ee"},
+  {id:"aibuild",   name:"AI / Build",     emoji:"🤖", color:"#7c9cf5"},
+  {id:"deepfocus", name:"Deep Focus",     emoji:"🎯", color:"#a78bfa"},
+  {id:"learning",  name:"Learning",       emoji:"📚", color:"#60a5fa"},
+  {id:"admin",     name:"Admin",          emoji:"🧹", color:"#c084fc"},
+  {id:"fitness",   name:"Fitness",        emoji:"🏋️", color:"#f472b6"},
+  {id:"meals",     name:"Meals",          emoji:"🍽️", color:"#fb923c"},
+  {id:"commute",   name:"Commute",        emoji:"🚗", color:"#38bdf8"},
+  {id:"family",    name:"Family",         emoji:"👪", color:"#fbbf24"},
+  {id:"teach",     name:"Teach Florence", emoji:"🧑‍🏫", color:"#facc15"},
+  {id:"people",    name:"People",         emoji:"🤝", color:"#4ade80"},
+  {id:"scroll",    name:"Scroll / YT",    emoji:"📱", color:"#f87171"},
+  {id:"entertain", name:"Entertain",      emoji:"🎬", color:"#e879f9"},
+  {id:"rest",      name:"Rest",           emoji:"🌙", color:"#818cf8"}
 ];
 // ordered keyword matching — first hit wins
 const KEYWORDS = [
-  ["scrolling", ["instagram","insta","tiktok","tik tok","reddit","scroll","feed","shorts","doomscroll","twitter","threads"]],
-  ["drift",     ["porn","zone out","zoned","nothing","idk","wasted","procrast","daze","mindless","stared","drift"]],
-  ["trading",   ["trade","trading","chart","backtest","ctrader","mt4","mt5","xau","gold ","market","r-multiple","drawdown","journal review"]],
-  ["body",      ["gym","run","ran","lift","workout","exercise","walk","stretch","yoga","cold shower","shower","cardio"]],
-  ["meals",     ["eat","ate","lunch","dinner","breakfast","coffee","meal","snack","cook","food","tea"]],
-  ["rest",      ["sleep","slept","nap","rest","lay down","lie down","relax","bed","meditat","breathe"]],
-  ["learning",  ["read","study","studied","course","learn","book","lecture","research","notes"]],
-  ["people",    ["call","friend","family","talk","talked","meet","met","date","partner","girlfriend","hang","chat with","dinner with"]],
-  ["admin",     ["clean","laundry","chore","admin","email","errand","bank","bills","tidy","plan","groceries","shop"]],
-  ["entertainment",["movie","netflix","show","game","gaming","watch","youtube","podcast","music","stream"]],
-  ["focus",     ["work","code","coding","build","wrote","writing","focus","deep","project","design","ship"]]
+  ["teach",     ["florence","teach florence","teaching florence","tutor florence","lesson with","homework"]],
+  ["paycheck",  ["hsbc","the office","day job","corporate","standup","stand-up","work meeting","work shift","boss","paycheck","clock in","clocked in"]],
+  ["aibuild",   ["claude","codex","chatgpt","gpt","prompt","coding","code","app","build app","debug","python","javascript","html","css","cursor","develop","ai tool"]],
+  ["deepfocus", ["deep focus","deep work","focus session","focus mode","flow state","focused work"]],
+  ["trading",   ["trading plan","trade journal","trading journal","trading business","backtest","strategy","r-multiple","risk management","trading review","journal review","my business","position size"]],
+  ["charts",    ["chart","charts","xau","gold"," market","price action","candle","setup","tradingview","mt4","mt5","ctrader","forex","take profit","stop loss"]],
+  ["learning",  ["read","reading","study","studied","book","course","lecture","research","notes","audible","article","learn"]],
+  ["fitness",   ["gym"," run "," ran ","running","jog","lift","workout","exercise","walk","stretch","yoga","mobility","cardio","cold shower","fitness","push day","pull day","leg day"]],
+  ["family",    ["family","wife","kids","son","daughter","parents","mum","mom","dad","grandma","grandpa","home with"]],
+  ["people",    ["friend","call","called","met ","meet","hang","date","partner","girlfriend","catch up","chat with","dinner with","social"]],
+  ["commute",   ["commut","driving","drive","drove","car ","train"," bus ","mrt","traffic","transit","on the way"]],
+  ["meals",     [" eat"," ate ","lunch","dinner","breakfast","coffee","meal","snack","cook","cooked","food"," tea ","brunch"]],
+  ["admin",     ["brush","teeth","shower","water","chore","clean","laundry","tidy","admin","errand","bank","bills","grocer","supermarket","shop","email","plan","dishes","wash"]],
+  ["scroll",    ["youtube","yt ","scroll","scrolling","instagram","insta","tiktok","tik tok","reddit","twitter","threads","feed","shorts","doomscroll"]],
+  ["entertain", ["movie","netflix","show","series","game","gaming","stream","podcast","music","watch","anime"]],
+  ["rest",      ["sleep","slept","nap","rest","relax","bed","meditat","breathe","lie down","lay down","chill","break"]]
 ];
+const CAT_VERSION = 2;
+// migrate old default bucket ids on existing entries → new scheme
+const OLD2NEW = {focus:"deepfocus", trading:"trading", learning:"learning", body:"fitness", people:"people", admin:"admin", meals:"meals", rest:"rest", scrolling:"scroll", entertainment:"entertain", drift:"scroll"};
 
 let state = load();
 let aiCfg = loadAI();
@@ -428,12 +489,19 @@ function load(){
   try{
     const s = JSON.parse(localStorage.getItem(KEY));
     if(s && Array.isArray(s.entries)){
-      s.categories = (Array.isArray(s.categories)&&s.categories.length)?s.categories:DEFAULT_CATS.slice();
       s.settings = s.settings || {wake:7, sleep:23};
+      if(!s.catVersion || s.catVersion < CAT_VERSION){
+        // one-time move to the new bucket scheme; keep old entries bucketed via the id remap
+        (s.entries||[]).forEach(e=>{ if(e.category && OLD2NEW[e.category]) e.category=OLD2NEW[e.category]; });
+        s.categories = DEFAULT_CATS.slice();
+        s.catVersion = CAT_VERSION;
+      } else {
+        s.categories = (Array.isArray(s.categories)&&s.categories.length)?s.categories:DEFAULT_CATS.slice();
+      }
       return s;
     }
   }catch(e){}
-  return {entries:[], categories:DEFAULT_CATS.slice(), settings:{wake:7, sleep:23}};
+  return {entries:[], categories:DEFAULT_CATS.slice(), settings:{wake:7, sleep:23}, catVersion:CAT_VERSION};
 }
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){ toast("Couldn't save — storage blocked"); } }
 
@@ -589,6 +657,31 @@ function renderRecent(){
   list.querySelectorAll("[data-bucket]").forEach(b=>b.onclick=()=>openBucket(b.dataset.bucket));
 }
 
+// ---- square bucket tiles (tap to set the bucket for the next log) ----
+let selectedBucket=null;
+function renderTiles(){
+  const grid=$("#bucketTiles"); if(!grid) return;
+  grid.innerHTML=state.categories.map(c=>`
+    <button class="tile${selectedBucket===c.id?' sel':''}" data-tile="${c.id}">
+      <span class="accent" style="background:${c.color}"></span>
+      <span class="em">${c.emoji}</span>
+      <span class="lb">${esc(c.name)}</span>
+    </button>`).join("");
+  grid.querySelectorAll("[data-tile]").forEach(b=>b.onclick=()=>{
+    selectedBucket = (selectedBucket===b.dataset.tile) ? null : b.dataset.tile;
+    renderTiles();
+  });
+}
+
+// ---- last voice transcript (full text + copy) ----
+let lastTranscript="";
+function renderTranscript(){
+  const card=$("#transcriptCard"); if(!card) return;
+  if(!lastTranscript){ card.style.display="none"; return; }
+  card.style.display="";
+  $("#transcriptText").textContent=lastTranscript;
+}
+
 let curRange="today";
 function rangeEntries(range){
   if(range==="all") return state.entries.slice();
@@ -664,7 +757,7 @@ function renderHourSelects(){
   }
 }
 
-function renderAll(){ buildBlockOptions(); renderRecent(); renderTimeline(); renderInsights(); renderStreak(); renderCatMgr(); }
+function renderAll(){ buildBlockOptions(); renderTiles(); renderRecent(); renderTranscript(); renderTimeline(); renderInsights(); renderStreak(); renderCatMgr(); }
 
 // ---- change a logged block's bucket ----
 function openBucket(id){
@@ -715,12 +808,28 @@ $("#logText").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefa
 $("#saveBtn").onclick=()=>{
   const txt=$("#logText").value.trim();
   if(!txt){ toast("Say what you did first"); $("#logText").focus(); return; }
-  const cat = categorize(txt);
+  const cat = selectedBucket || categorize(txt);
   addEntry(selectedWhen(), txt, cat);
-  $("#logText").value="";
+  $("#logText").value=""; selectedBucket=null;
   const sel=$("#blockSel"); if(sel.selectedIndex < sel.options.length-1) sel.selectedIndex++;
   renderAll();
   toast(cat?("Logged → "+catById(cat).name):"Logged");
+};
+
+$("#copyTranscript").onclick=async()=>{
+  const t=lastTranscript||""; if(!t) return;
+  let ok=false;
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){ await navigator.clipboard.writeText(t); ok=true; }
+  }catch(e){}
+  if(!ok){
+    const ta=document.createElement("textarea"); ta.value=t;
+    ta.style.position="fixed"; ta.style.top="0"; ta.style.opacity="0";
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    try{ ok=document.execCommand("copy"); }catch(e){}
+    document.body.removeChild(ta);
+  }
+  toast(ok?"Copied ✓":"Couldn't copy — select the text");
 };
 
 $("#bsCancel").onclick=closeBucket;
@@ -787,124 +896,76 @@ $("#clearBtn").onclick=()=>{
   }
 };
 
-// ---- inline dictation (free, Web Speech) ----
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+// ---- inline mic: AI transcription that dictates into the "What happened" box ----
 const micBtn=$("#micBtn");
-if(SR){
-  let rec=null, listening=false;
-  micBtn.onclick=()=>{
-    if(listening){ rec && rec.stop(); return; }
-    rec=new SR(); rec.lang="en-US"; rec.interimResults=true; rec.continuous=false;
-    let finalTxt="";
-    rec.onstart=()=>{ listening=true; micBtn.classList.add("live"); };
-    rec.onerror=()=>{ toast("Mic unavailable — type or use the keyboard mic"); };
-    rec.onend=()=>{ listening=false; micBtn.classList.remove("live"); };
-    rec.onresult=(ev)=>{
-      let interim="";
-      for(let i=ev.resultIndex;i<ev.results.length;i++){
-        const r=ev.results[i]; if(r.isFinal) finalTxt+=r[0].transcript; else interim+=r[0].transcript;
-      }
-      $("#logText").value=(finalTxt+interim).replace(/^\s+/,"");
-    };
-    rec.start();
-  };
-}else{
-  micBtn.title="Use your keyboard's mic to dictate";
-  micBtn.onclick=()=>toast("Tap the 🎤 on your keyboard to dictate");
+micBtn.onclick=()=>{
+  if(!aiCfg.key){ toast("Add your OpenAI key in More → Voice entry"); switchTab("more"); setTimeout(()=>{ const el=$("#aiKey"); if(el){ el.scrollIntoView({behavior:"smooth",block:"center"}); el.focus(); } },280); return; }
+  if(recActive){ if(voiceMode==="fill") stopRecording(); return; }
+  voiceMode="fill";
+  startRecording();
+};
+function setMicState(s){
+  const b=$("#micBtn"); if(!b) return;
+  b.classList.remove("rec","busy");
+  if(s==="rec") b.classList.add("rec");
+  else if(s==="busy") b.classList.add("busy");
 }
 
 /* =========================================================
-   ChatGPT voice assistant  (OpenAI: Whisper + Chat + TTS)
+   Voice — OpenAI transcription only (gpt-4o-mini-transcribe → whisper-1).
+   Two destinations, chosen by voiceMode:
+     "log"  → big mic sheet: auto-logs the entry (applyTranscript)
+     "fill" → inline mic: types the transcript into the log box (fillTranscript)
+   No chat, no tool-calling, no text-to-speech.
    ========================================================= */
-const TOOLS = [
-  { type:"function", function:{
-    name:"log_entries",
-    description:"Record one or more things the user did into their 30-minute time log. Use the user's local timezone. Each entry is one ~30-minute block; if an activity lasted longer, split it across consecutive blocks. If the user gives no time, omit 'time' (defaults to the current block).",
-    parameters:{ type:"object", properties:{
-      entries:{ type:"array", items:{ type:"object", properties:{
-        time:{ type:"string", description:"Start time as HH:MM in 24h local time, snapped to :00 or :30. Optional." },
-        activity:{ type:"string", description:"Short description of what they did." },
-        bucket:{ type:"string", description:"One of the user's bucket ids. Optional; auto-detected if omitted." }
-      }, required:["activity"] } }
-    }, required:["entries"] }
-  }},
-  { type:"function", function:{
-    name:"get_summary",
-    description:"Get a breakdown of how the user has spent their logged time, by bucket, for a range.",
-    parameters:{ type:"object", properties:{
-      range:{ type:"string", enum:["today","7","all"], description:"today, last 7 days, or all time" }
-    }, required:["range"] }
-  }}
-];
 
-function systemPrompt(){
-  const now=new Date();
-  const buckets=state.categories.map(c=>c.id+" ("+c.name+")").join(", ");
-  return [
-    'You are the friendly voice assistant inside "Trace", a personal 30-minute time-audit app.',
-    'Current local time is '+blkLabel(now)+' on '+now.toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric"})+'. The user\'s waking day runs '+pad(state.settings.wake)+':00 to '+pad(state.settings.sleep)+':00.',
-    'Buckets (use the id when logging): '+buckets+'.',
-    'When the user tells you what they did, call log_entries to record it. Choose the best bucket id, or omit bucket to let the app auto-sort. If they give no time, omit it.',
-    'When the user asks how they spent their time, call get_summary, then answer in one or two short spoken sentences with real numbers.',
-    'Keep every reply short, warm and non-judgmental — this is about awareness, not grading. Briefly confirm what you logged. Never lecture or moralize.'
-  ].join(" ");
-}
-
-function execLog(entries){
-  let added=0, seq=0; const base=snap(new Date()); const done=[];
-  (entries||[]).forEach(en=>{
-    if(!en || !en.activity) return;
-    let when;
-    if(en.time && /^\d{1,2}:\d{2}$/.test(en.time)){ const [h,m]=en.time.split(":").map(Number); when=snap(blkStart(h,m)); }
-    else { when=new Date(base.getTime()+seq*30*60000); seq++; }
-    let cat=(en.bucket && state.categories.some(c=>c.id===en.bucket)) ? en.bucket : categorize(en.activity);
-    addEntry(when, en.activity, cat);
-    added++; done.push({time:blkLabel(snap(when)), activity:en.activity, bucket:catById(cat).name});
-  });
-  renderAll();
-  return {logged:added, entries:done};
-}
-
-// --- assistant session state ---
-let vMessages=[];
-let recActive=false, mediaStream=null, mediaRec=null, recChunks=[], audioCtx=null, vadRAF=null, ttsAudio=null;
+// --- voice session state ---
+let recActive=false, mediaStream=null, mediaRec=null, recChunks=[], audioCtx=null, vadRAF=null;
+let voiceMode="log";
 
 function setStatus(t){ $("#vStatus").textContent=t; }
 function setOrb(s){ const o=$("#vOrb"); o.classList.remove("listening","thinking","speaking"); if(s&&s!=="idle") o.classList.add(s); }
 function orbDisabled(b){ $("#vOrb").disabled=!!b; }
-function addBubble(role, text){
-  const log=$("#vLog");
-  const d=document.createElement("div"); d.className="vbubble "+role; d.textContent=text;
-  log.appendChild(d); log.scrollTop=log.scrollHeight;
-}
 
 function openAssistant(){
+  voiceMode="log";
   $("#vsheet").classList.add("open");
   document.body.classList.add("noscroll");
-  vMessages=[{role:"system", content:systemPrompt()}];
-  if(!aiCfg.key) vNoKey(); else vGreet();
+  if(!aiCfg.key) vNoKey(); else vReady();
 }
 function closeAssistant(){
   $("#vsheet").classList.remove("open");
   document.body.classList.remove("noscroll");
-  abortRecording(); stopSpeaking(); setOrb("idle");
+  abortRecording(); setOrb("idle");
 }
 function vNoKey(){
   $("#vLog").innerHTML =
     '<div class="vsetup">'+
-      '<div class="vsetup-ic">🎙️</div>'+
-      '<h3>Talk to Trace</h3>'+
-      '<p>Add your OpenAI API key to log your time by voice and ask where it went. The key is stored only on this device.</p>'+
+      '<div class="vsetup-ic">🎤</div>'+
+      '<h3>Voice entry</h3>'+
+      '<p>Add your OpenAI API key to dictate your log by voice. Speech is transcribed by OpenAI — usually a fraction of a cent. The key is stored only on this device.</p>'+
       '<button class="primary" id="vGoKey">Add API key</button>'+
       '<a class="vlink" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">Get a key →</a>'+
     '</div>';
   $("#vGoKey").onclick=()=>{ closeAssistant(); switchTab("more"); setTimeout(()=>{ const el=$("#aiKey"); if(el){ el.scrollIntoView({behavior:"smooth",block:"center"}); el.focus(); } },280); };
   setStatus(""); orbDisabled(true);
 }
-function vGreet(){
-  $("#vLog").innerHTML="";
-  addBubble("assistant","Hey — tell me what you just did, or ask where your time went today.");
+function vReady(){
+  $("#vLog").innerHTML =
+    '<div class="vsetup">'+
+      '<div class="vsetup-ic">🎤</div>'+
+      '<h3>Say what you did</h3>'+
+      '<p>Tap the mic and speak one entry — e.g. "gym then made breakfast." It\'s transcribed and logged automatically into the current time block. The full text also appears on the Log tab to copy.</p>'+
+    '</div>';
   setStatus("Tap to talk"); setOrb("idle"); orbDisabled(false);
+}
+function vError(msg){
+  $("#vLog").innerHTML =
+    '<div class="vsetup">'+
+      '<div class="vsetup-ic">⚠️</div>'+
+      '<h3>Couldn\'t transcribe</h3>'+
+      '<p>'+esc(msg)+'</p>'+
+    '</div>';
 }
 
 $("#fab").onclick=openAssistant;
@@ -912,7 +973,7 @@ $("#vClose").onclick=closeAssistant;
 $("#vOrb").onclick=()=>{
   if(!aiCfg.key){ vNoKey(); return; }
   if(recActive){ stopRecording(); return; }
-  if(ttsAudio){ stopSpeaking(); }
+  voiceMode="log";
   startRecording();
 };
 
@@ -920,11 +981,10 @@ $("#vOrb").onclick=()=>{
 async function startRecording(){
   if(recActive) return;
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-    setStatus("Mic needs a secure (https) page"); return;
+    const m="Mic needs a secure (https) page"; setStatus(m); if(voiceMode==="fill"){ setMicState("idle"); toast(m); } return;
   }
   try{ mediaStream = await navigator.mediaDevices.getUserMedia({audio:true}); }
-  catch(e){ setStatus("Allow microphone access to talk"); return; }
-  stopSpeaking();
+  catch(e){ const m="Allow microphone access to talk"; setStatus(m); if(voiceMode==="fill"){ setMicState("idle"); toast(m); } return; }
   recChunks=[];
   let mime="";
   if(window.MediaRecorder){
@@ -939,10 +999,11 @@ async function startRecording(){
     const blob=new Blob(recChunks,{type});
     cleanupRec();
     if(blob.size>1500) handleAudio(blob, type);
-    else { setOrb("idle"); setStatus("Tap to talk"); }
+    else { setOrb("idle"); setStatus("Tap to talk"); if(voiceMode==="fill") setMicState("idle"); }
   };
   mediaRec.start();
   recActive=true; setOrb("listening"); setStatus("Listening… tap to send");
+  if(voiceMode==="fill") setMicState("rec");
   startVAD();
 }
 function startVAD(){
@@ -969,7 +1030,8 @@ function stopRecording(){
   recActive=false;
   if(vadRAF) cancelAnimationFrame(vadRAF);
   try{ if(mediaRec && mediaRec.state!=="inactive") mediaRec.stop(); }catch(e){}
-  setOrb("thinking"); setStatus("Thinking…");
+  setOrb("thinking"); setStatus("Transcribing…");
+  if(voiceMode==="fill") setMicState("busy");
 }
 function abortRecording(){
   if(!recActive) return;
@@ -984,105 +1046,78 @@ function cleanupRec(){
 
 async function handleAudio(blob, type){
   setOrb("thinking"); setStatus("Transcribing…");
+  if(voiceMode==="fill") setMicState("busy");
   let text="";
   try{ text=await transcribe(blob, type); }
-  catch(e){ setOrb("idle"); setStatus("Tap to talk"); addBubble("err","⚠️ "+(e.message||"Transcription failed")); return; }
-  text=(text||"").trim();
-  if(!text){ setOrb("idle"); setStatus("Didn't catch that — tap to talk"); return; }
-  addBubble("user", text);
-  vMessages.push({role:"user", content:text});
-  await runAssistant();
-}
-
-async function runAssistant(){
-  setOrb("thinking"); setStatus("Thinking…");
-  try{
-    for(let round=0; round<5; round++){
-      const msg=await chatComplete(vMessages);
-      if(msg.tool_calls && msg.tool_calls.length){
-        vMessages.push({role:"assistant", content:msg.content||null, tool_calls:msg.tool_calls});
-        for(const tc of msg.tool_calls){
-          let res;
-          try{
-            const args=JSON.parse(tc.function.arguments||"{}");
-            if(tc.function.name==="log_entries") res=execLog(args.entries||[]);
-            else if(tc.function.name==="get_summary") res=aggregate(args.range||"today");
-            else res={error:"unknown tool"};
-          }catch(e){ res={error:String(e&&e.message||e)}; }
-          vMessages.push({role:"tool", tool_call_id:tc.id, content:JSON.stringify(res)});
-        }
-        continue;
-      }
-      vMessages.push({role:"assistant", content:msg.content||""});
-      const text=(msg.content||"").trim();
-      if(text){ addBubble("assistant", text); await speak(text); }
-      break;
-    }
-  }catch(e){
-    addBubble("err","⚠️ "+(e.message||"Something went wrong"));
+  catch(e){
+    setOrb("idle"); orbDisabled(false); setStatus("Tap to try again");
+    if(voiceMode==="fill"){ setMicState("idle"); toast("⚠️ "+(e.message||"Transcription failed")); }
+    else vError(e.message||"Transcription failed");
+    return;
   }
-  setOrb("idle"); setStatus("Tap to talk"); trimMessages();
+  text=(text||"").trim();
+  if(!text){
+    setOrb("idle"); setStatus("Didn't catch that — tap to talk");
+    if(voiceMode==="fill"){ setMicState("idle"); toast("Didn't catch that — try again"); }
+    return;
+  }
+  if(voiceMode==="fill") fillTranscript(text);
+  else applyTranscript(text);
 }
 
-function trimMessages(){
-  if(vMessages.length<=20) return;
-  const sys=vMessages[0];
-  let tail=vMessages.slice(-16);
-  while(tail.length && tail[0].role!=="user") tail.shift();
-  vMessages=[sys].concat(tail);
+// inline mic: type the transcript into the log box for review (no auto-log)
+function fillTranscript(text){
+  const box=$("#logText");
+  box.value = box.value.trim() ? (box.value.trim()+" "+text) : text;
+  setMicState("idle");
+  box.focus();
+  toast("Transcribed ✓");
+}
+
+// auto-log the transcript into the current 30-min block, and show the full text to copy
+function applyTranscript(text){
+  const cat = selectedBucket || categorize(text);
+  addEntry(new Date(), text, cat);   // addEntry snaps to the current half-hour
+  selectedBucket=null;
+  lastTranscript=text;
+  closeAssistant();
+  switchTab("log");
+  renderAll();
+  toast(cat ? ("Logged by voice → "+catById(cat).name) : "Logged by voice");
 }
 
 async function errMsg(r){
   let m="HTTP "+r.status;
   try{ const j=await r.json(); if(j.error&&j.error.message) m=j.error.message; }catch(e){}
-  if(r.status===401) m="Invalid API key — check it in More → Voice assistant.";
+  if(r.status===401) m="Invalid API key — check it in More → Voice entry.";
   if(r.status===429) m="Rate limited or out of credit on your OpenAI account.";
   return m;
 }
-async function transcribe(blob, type){
-  const ext = type.includes("mp4")?"mp4":(type.includes("webm")?"webm":"wav");
+async function transcribeWith(model, blob, ext){
   const fd=new FormData();
   fd.append("file", blob, "audio."+ext);
-  fd.append("model", AI.transcribe);
+  fd.append("model", model);
   const r=await fetch("https://api.openai.com/v1/audio/transcriptions",{
     method:"POST", headers:{Authorization:"Bearer "+aiCfg.key}, body:fd
   });
   if(!r.ok) throw new Error(await errMsg(r));
   return (await r.json()).text;
 }
-async function chatComplete(messages){
-  const r=await fetch("https://api.openai.com/v1/chat/completions",{
-    method:"POST",
-    headers:{Authorization:"Bearer "+aiCfg.key,"Content-Type":"application/json"},
-    body:JSON.stringify({model:AI.chat, messages, tools:TOOLS, tool_choice:"auto", temperature:0.3})
-  });
-  if(!r.ok) throw new Error(await errMsg(r));
-  return (await r.json()).choices[0].message;
+async function transcribe(blob, type){
+  const ext = type.includes("mp4")?"mp4":(type.includes("webm")?"webm":"wav");
+  const models = Array.isArray(AI.transcribe)?AI.transcribe:[AI.transcribe];
+  let lastErr;
+  for(const m of models){
+    try{ return await transcribeWith(m, blob, ext); }
+    catch(e){
+      lastErr=e;
+      // auth/credit errors fail the same for any model — don't waste the fallback
+      if(/Invalid API key|Rate limited|out of credit/i.test(e.message||"")) throw e;
+    }
+  }
+  throw lastErr;
 }
-async function speak(text){
-  if(!aiCfg.key) return;
-  try{
-    setOrb("speaking"); setStatus("Speaking…");
-    const r=await fetch("https://api.openai.com/v1/audio/speech",{
-      method:"POST",
-      headers:{Authorization:"Bearer "+aiCfg.key,"Content-Type":"application/json"},
-      body:JSON.stringify({model:AI.tts, voice:aiCfg.voice||"nova", input:text})
-    });
-    if(!r.ok) return; // skip audio silently; text reply is already shown
-    const blob=await r.blob();
-    stopSpeaking();
-    ttsAudio=new Audio(URL.createObjectURL(blob));
-    await ttsAudio.play().catch(()=>{});
-    await new Promise(res=>{ ttsAudio.onended=res; ttsAudio.onerror=res; });
-  }catch(e){ /* audio is best-effort */ }
-}
-function stopSpeaking(){ if(ttsAudio){ try{ttsAudio.pause();}catch(e){} ttsAudio=null; } }
-
 // ---- voice settings (More tab) ----
-function populateVoices(){
-  const el=$("#aiVoice"); el.innerHTML="";
-  VOICES.forEach(v=>{ const o=document.createElement("option"); o.value=v; o.textContent=v[0].toUpperCase()+v.slice(1); if(v===aiCfg.voice)o.selected=true; el.appendChild(o); });
-}
 function refreshAIStatus(){
   const s=$("#aiStatus");
   if(aiCfg.key){ s.textContent="Connected ✓"; s.style.color="var(--good)"; }
@@ -1095,7 +1130,6 @@ $("#aiSave").onclick=()=>{
   aiCfg.key=v; saveAI(); $("#aiKey").value=""; refreshAIStatus(); toast("Key saved ✓");
 };
 $("#aiClear").onclick=()=>{ aiCfg.key=""; $("#aiKey").value=""; saveAI(); refreshAIStatus(); toast("Key removed"); };
-$("#aiVoice").onchange=e=>{ aiCfg.voice=e.target.value; saveAI(); };
 
 // ---- clock ----
 function tick(){
@@ -1110,7 +1144,6 @@ document.addEventListener("visibilitychange",()=>{ if(!document.hidden) buildBlo
 
 // ---- boot ----
 renderHourSelects();
-populateVoices();
 refreshAIStatus();
 renderAll();
 </script>
