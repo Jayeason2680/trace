@@ -11,9 +11,9 @@ see the PDFs shared in the project chat.
 
 | Milestone | Target | Status |
 |---|---|---|
-| **M0 · Session 1** — docs, journal template, ShadowLogger, ZoneExec core | 24 Jul | ✅ done (this commit) |
-| M1 · VPS hardened + ShadowLogger live on your charts | 25–27 Jul | ⬜ you: install (guide in docs/) |
-| M2 · Session 2 — ZoneExec MVP live on **demo** (orders, SL/TP, caps, tiers, /killswitch) | ~28 Jul | ⬜ |
+| **M0 · Session 1** — docs, journal template, ShadowLogger, ZoneExec core | 24 Jul | ✅ done |
+| **M1 · ShadowLogger LIVE** — installed on FTMO cTrader (GER40.cash M15), journal writing, heartbeat green, first zone configured (`RED BUY`) | 24 Jul — 3 days early | ✅ done (hardening checklist still owed) |
+| **M2 · Session 2** — ZoneExec MVP for **demo**: T1/T2 entries, broker-side SL/TP + order expiry, caps, FTMO Normal laws (weekend flatten, news pause via news.txt, −3%/−8% Prague-reset breakers), KILL.txt switch | 24 Jul (ahead of ~28 Jul) | 🔨 code built — multi-agent audit in flight |
 | M3 · Session 3 — fixes from first live events + drills (kill-test, restore) | ~1–2 Aug | ⬜ |
 | M4 · Demo soak, event-based checklist (≥20 events, 2 weekends, 1 red-news week, 1 forced restart, 1 update cycle, zero unhandled errors) | 28 Jul – ~15 Aug | ⬜ |
 | **M5 · GO-LIVE at minimum size** | **~17 Aug** (prudent fallback: 31 Aug) | ⬜ |
