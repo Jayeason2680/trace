@@ -1,19 +1,29 @@
 // ============================================================================
-// ZoneExec v1 — Zone Console, Session 2 (DEMO ONLY until every gate passes)
-// Turns configured rectangles into risk-capped resting orders with broker-side
-// SL/TP and broker-side expiry. FTMO NORMAL rules are law in this build:
-//   - WKD:HOLD rejected; ALL zone positions/orders flatten Friday (UTC time param)
-//   - news pause: no arming and resting orders suspended ±NewsPauseMinutes
-//     around timestamps listed in Documents\ZoneConsole\news.txt (UTC)
-//   - daily cut-out −3% and account breaker −8%, both anchored to the FTMO
-//     initial balance, daily reset at midnight Prague time
-// Kill switch without Telegram: create Documents\ZoneConsole\KILL.txt →
-// every ZC position closes, every ZC order cancels, arming latches off until
-// the file is deleted.
+// ZoneExec v1.1 — Zone Console, Session 2 (post 4-agent audit, 27 findings fixed)
+// DEMO ONLY until every roadmap gate passes.
 //
-// Self-contained single file for paste-once install. The canonical, testable
-// core lives in src/ZoneExec/{ZoneRecord,ZoneValidator,RiskEngine}.cs — keep
-// logic changes mirrored there.
+// Turns configured rectangles into risk-capped resting orders with broker-side
+// SL/TP and broker-side expiry, under FTMO NORMAL law:
+//   - WKD:HOLD rejected; ALL zone positions/orders flatten Friday (param, UTC)
+//   - optional daily flatten (param) for instruments with a >2h nightly break
+//     (FTMO Normal forbids holding through breaks >2h — set 20:40 on GER40)
+//   - news windows (news.txt, UTC ±NewsPauseMinutes): pendings cancelled AND
+//     (param, default ON) open ZC positions closed before the window
+//   - daily cut-out −3% and account breaker −8% of FTMO initial balance,
+//     Prague-midnight reset, persisted across restarts, FLATTEN on trip
+// Kill switch: create Documents\ZoneConsole\KILL.txt → flatten + latch off.
+// After deleting it, re-save each zone's comment to re-arm (deliberate).
+//
+// v1.1 audit fixes (highlights): no double-place after restart (existing-order
+// adoption); periodic re-arm pass replaces broken RearmAll; ID write-back no
+// longer self-churns; passive-side gate (no marketable limits, no in-zone or
+// post-stop instant entries) + cooldown after closes; T2 confirm requires a
+// recent touch and bounded distance; day anchor persisted (+ late-anchor safe
+// mode); breakers flatten; touches keyed by zone id; debounced geometry edits;
+// heartbeat URL validated; OnTimer exception-guarded; NaN-ATR refuses to arm.
+//
+// Single-file for paste-once install. Canonical testable core mirrored in
+// src/ZoneExec/{ZoneRecord,ZoneValidator,RiskEngine}.cs — keep in sync.
 // Attach ONE instance per symbol, on the chart you draw that symbol's zones on.
 // ============================================================================
 using System;
@@ -49,24 +59,32 @@ namespace cAlgo.Robots
         [Parameter("Max spread (pips) to allow arming/entry", DefaultValue = 6.0, MinValue = 0.5, Group = "Risk")]
         public double MaxSpreadPips { get; set; }
 
+        [Parameter("Cooldown after a position closes (min)", DefaultValue = 30, MinValue = 0, Group = "Risk")]
+        public int RearmCooldownMinutes { get; set; }
+
         [Parameter("News pause ± minutes", DefaultValue = 15, MinValue = 2, Group = "FTMO rules")]
         public int NewsPauseMinutes { get; set; }
 
-        [Parameter("Friday flatten time UTC (HH:mm)", DefaultValue = "20:30", Group = "FTMO rules")]
+        [Parameter("Close positions before news window", DefaultValue = true, Group = "FTMO rules")]
+        public bool NewsFlattenPositions { get; set; }
+
+        [Parameter("Friday flatten UTC (HH:mm)", DefaultValue = "20:30", Group = "FTMO rules")]
         public string FridayFlattenUtc { get; set; }
 
+        [Parameter("Daily flatten UTC (HH:mm, empty = off; set 20:40 on indices like GER40)", DefaultValue = "", Group = "FTMO rules")]
+        public string DailyFlattenUtc { get; set; }
+
         // ---------------- constants (mirror RiskEngine.cs) ----------------
-        private const int MaxOpenPositions = 3;
-        private const double MaxTotalOpenRiskPercent = 3.0;
-        private const double MaxFactorRiskPercent = 2.0;
-        private const double DailyCutoutPercent = 3.0;    // of FTMO initial balance
-        private const double AccountBreakerPercent = 8.0; // of FTMO initial balance
-        private const double SlBufferFrac = 0.25;         // SL beyond far edge, fraction of height
+        private const double DailyCutoutPercent = 3.0;    // of FTMO initial balance (FTMO fails at 5)
+        private const double AccountBreakerPercent = 8.0; // of FTMO initial balance (FTMO fails at 10)
+        private const double SlBufferFrac = 0.25;
+        private const double T2MaxChaseFrac = 0.5;        // confirm entry must be within 0.5×height of the zone
+        private const int T2ConfirmMaxBars = 12;          // confirm within 12 M15 bars (3h) of last touch
+        private const int EditQuietSeconds = 2;           // debounce for drag edits
         private const string LabelPrefix = "ZC:";
 
         private static readonly HttpClient HttpShared = new HttpClient() { Timeout = TimeSpan.FromSeconds(10) };
 
-        // ---------------- per-zone runtime state ----------------
         private enum ZStatus { Draft, Rejected, Armed, WaitingConfirm, Filled, Retired, Expired, Killed }
 
         private sealed class Zone
@@ -77,115 +95,167 @@ namespace cAlgo.Robots
             public double Top, Bottom;
             public ZStatus Status = ZStatus.Draft;
             public int TouchesUsed;
+            public DateTime LastTouchUtc = DateTime.MinValue;
             public bool InTouch;
             public string LastComment = "";
             public DateTime LastRejectJournal = DateTime.MinValue;
+            public DateTime PendingSyncUtc = DateTime.MinValue;  // debounce stamp; MinValue = clean
+            public DateTime CooldownUntilUtc = DateTime.MinValue;
+            public string LastPaintHex = "";
         }
 
         private readonly Dictionary<string, Zone> _zones = new Dictionary<string, Zone>();
+        private readonly Dictionary<string, int> _loadedTouches = new Dictionary<string, int>();       // by zone id
+        private readonly Dictionary<string, DateTime> _loadedLastTouch = new Dictionary<string, DateTime>();
         private string _dir, _journalPath, _statePath, _newsPath, _killPath;
-        private int _secToHeartbeat; private int _hbFail;
+        private int _secToHeartbeat; private int _hbFail; private bool _hbDisabled;
         private DateTime _lastDigestUtc = DateTime.MinValue;
-        private double _initialBalance;                    // FTMO anchor
+        private double _initialBalance;
         private double _dayStartRef; private DateTime _dayStartDatePrague = DateTime.MinValue;
         private DateTime _dailyTrippedUntilUtc = DateTime.MinValue;
-        private bool _accountTripped, _killLatched, _newsSuspended, _selfWrite;
+        private DateTime _anchorLateBlockUntilUtc = DateTime.MinValue;
+        private bool _accountTripped, _killLatched, _newsSuspended, _tzBroken, _stateDirty;
+        private DateTime _lastStateFlushUtc = DateTime.MinValue;
+        private DateTime _lastRearmPassUtc = DateTime.MinValue;
+        private DateTime _lastNewsStaleWarnUtc = DateTime.MinValue;
         private AverageTrueRange _dailyAtr;
         private Bars _dailyBars, _m15Bars;
         private DateTime _lastM15Seen = DateTime.MinValue;
         private TimeZoneInfo _prague;
+        private TimeSpan _fridayCut, _dailyCut; private bool _dailyCutEnabled;
 
         // ============================================================ lifecycle
         protected override void OnStart()
         {
+            if (RunningMode != RunningMode.RealTime)
+            { Print("ZoneExec requires live charts (drawings do not exist in backtest); stopping."); Stop(); return; }
+
             _dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ZoneConsole");
             Directory.CreateDirectory(Path.Combine(_dir, "journal"));
-            var baseName = SymbolName + "-" + Chart.TimeFrame + "-exec";
+            var baseName = SymbolName + "-" + Chart.TimeFrame + "-acct" + Account.Number + "-exec";
             _journalPath = Path.Combine(_dir, "journal", baseName + ".jsonl");
             _statePath = Path.Combine(_dir, "journal", baseName + ".state");
             _newsPath = Path.Combine(_dir, "news.txt");
             _killPath = Path.Combine(_dir, "KILL.txt");
 
-            try { _prague = TimeZoneInfo.FindSystemTimeZoneById("Central Europe Standard Time"); }
-            catch { _prague = TimeZoneInfo.CreateCustomTimeZone("CET+1", TimeSpan.FromHours(1), "CET+1", "CET+1"); }
+            _prague = ResolvePrague();
+            if (_prague == null)
+            {
+                _tzBroken = true;
+                Journal("tz_error", null, ("msg", "Prague timezone unavailable - ARMING DISABLED (day anchor would be wrong)"));
+            }
+
+            if (!TimeSpan.TryParseExact(FridayFlattenUtc, "hh\\:mm", CultureInfo.InvariantCulture, out _fridayCut))
+            { _fridayCut = new TimeSpan(20, 30, 0); Journal("param_warning", null, ("msg", "bad Friday flatten '" + FridayFlattenUtc + "', using 20:30")); }
+            _dailyCutEnabled = TimeSpan.TryParseExact(DailyFlattenUtc ?? "", "hh\\:mm", CultureInfo.InvariantCulture, out _dailyCut);
+            if (!_dailyCutEnabled && !string.IsNullOrWhiteSpace(DailyFlattenUtc))
+                Journal("param_warning", null, ("msg", "bad Daily flatten '" + DailyFlattenUtc + "' - daily flatten OFF"));
+
+            if (!string.IsNullOrWhiteSpace(HeartbeatUrl) && !Uri.TryCreate(HeartbeatUrl, UriKind.Absolute, out _))
+            { _hbDisabled = true; Journal("param_warning", null, ("msg", "heartbeat URL invalid - heartbeat disabled")); }
 
             _dailyBars = MarketData.GetBars(TimeFrame.Daily);
             _dailyAtr = Indicators.AverageTrueRange(_dailyBars, 14, MovingAverageType.Simple);
             _m15Bars = MarketData.GetBars(TimeFrame.Minute15);
 
             LoadState();
+            if (InitialBalanceParam > 0 && Math.Abs(InitialBalanceParam - _initialBalance) > 0.005)
+            {
+                if (_initialBalance > 0) Journal("anchor_changed", null, ("old", F(_initialBalance)), ("new", F(InitialBalanceParam)));
+                _initialBalance = InitialBalanceParam; MarkStateDirty();
+            }
             if (_initialBalance <= 0)
             {
-                _initialBalance = InitialBalanceParam > 0 ? InitialBalanceParam : Account.Balance;
-                SaveState();
-                Journal("anchor_set", null, ("initial_balance", F(_initialBalance)));
+                _initialBalance = Account.Balance; MarkStateDirty();
+                Journal("anchor_set", null, ("initial_balance", F(_initialBalance)),
+                        ("note", "snapshot of current balance - set the parameter explicitly if this is not the FTMO starting balance"));
             }
+            if (Math.Abs(Account.Balance - _initialBalance) / Math.Max(_initialBalance, 1) > 0.01)
+                Journal("anchor_note", null, ("balance", F(Account.Balance)), ("anchor", F(_initialBalance)));
 
-            Chart.ObjectsAdded += e => { if (!_selfWrite) foreach (var r in e.ChartObjects.OfType<ChartRectangle>()) SyncZone(r); };
-            Chart.ObjectsUpdated += e => { if (!_selfWrite) foreach (var r in e.ChartObjects.OfType<ChartRectangle>()) SyncZone(r); };
+            // events only stamp zones dirty; all processing is debounced in OnTimer
+            Chart.ObjectsAdded += e => { foreach (var r in e.ChartObjects.OfType<ChartRectangle>()) StampDirty(r.Name); };
+            Chart.ObjectsUpdated += e => { foreach (var r in e.ChartObjects.OfType<ChartRectangle>()) StampDirty(r.Name); };
             Chart.ObjectsRemoved += e => { foreach (var r in e.ChartObjects.OfType<ChartRectangle>()) OnZoneRemoved(r.Name); };
 
             ReconcileBrokerState();
-            foreach (var r in Chart.Objects.OfType<ChartRectangle>()) SyncZone(r);
+            foreach (var r in Chart.Objects.OfType<ChartRectangle>()) SyncZone(r, force: true);
 
             _secToHeartbeat = HeartbeatSeconds;
             Timer.Start(TimeSpan.FromSeconds(1));
             Journal("exec_start", null, ("zones", _zones.Count.ToString(CultureInfo.InvariantCulture)),
-                    ("initial_balance", F(_initialBalance)), ("account_is_live", IsBacktesting ? "backtest" : Account.IsLive ? "LIVE" : "demo"));
+                    ("initial_balance", F(_initialBalance)),
+                    ("account", Account.IsLive ? "LIVE" : "demo"));
             if (Account.IsLive)
-                Journal("warning", null, ("msg", "LIVE ACCOUNT DETECTED - demo gate not waived by code; proceed only if gates passed"));
+                Journal("warning", null, ("msg", "LIVE ACCOUNT - proceed only if every roadmap gate is passed"));
         }
 
-        protected override void OnStop() { Journal("exec_stop", null); SaveState(); }
+        protected override void OnStop() { Journal("exec_stop", null); FlushState(); }
 
-        // ============================================================ zone sync (draw/edit)
-        private void SyncZone(ChartRectangle rect)
+        private static TimeZoneInfo ResolvePrague()
+        {
+            foreach (var id in new[] { "Central Europe Standard Time", "Europe/Prague" })
+                try { return TimeZoneInfo.FindSystemTimeZoneById(id); } catch { }
+            return null;
+        }
+
+        private void StampDirty(string rectName)
+        {
+            Zone z;
+            if (!_zones.TryGetValue(rectName, out z)) { z = new Zone { RectName = rectName }; _zones[rectName] = z; }
+            z.PendingSyncUtc = Server.Time;
+        }
+
+        // ============================================================ zone sync (debounced)
+        private void SyncZone(ChartRectangle rect, bool force = false)
         {
             Zone z;
             if (!_zones.TryGetValue(rect.Name, out z))
-            {
-                z = new Zone { RectName = rect.Name };
-                _zones[rect.Name] = z;
-            }
-            double top = Math.Max(rect.Y1, rect.Y2), bottom = Math.Min(rect.Y1, rect.Y2);
+            { z = new Zone { RectName = rect.Name }; _zones[rect.Name] = z; }
+            z.PendingSyncUtc = DateTime.MinValue;
+
+            double top = RoundTick(Math.Max(rect.Y1, rect.Y2)), bottom = RoundTick(Math.Min(rect.Y1, rect.Y2));
             var comment = rect.Comment ?? "";
-            bool changed = comment != z.LastComment || top != z.Top || bottom != z.Bottom;
-            z.Top = top; z.Bottom = bottom;
-            if (!changed) return;
 
-            bool commentChanged = comment != z.LastComment;
-            z.LastComment = comment;
+            // Self-writeback no-op guard (audit fix): the comment we wrote back
+            // (same content, our ID appended) is not an edit.
+            bool geomSame = top == z.Top && bottom == z.Bottom;
+            if (!force && geomSame && comment == z.LastComment) return;
 
-            // An armed zone whose comment or geometry changes is DISARMED first —
-            // the drawing is the instruction; if the instruction changed, re-approve it.
+            List<string> errors;
+            var rec = ZoneRecord.TryParse(comment, Server.Time, out errors);
+            bool sameIdentity = rec != null && z.Rec != null && rec.Id == z.Id && !string.IsNullOrEmpty(z.Id);
+            if (!force && geomSame && sameIdentity && comment != z.LastComment)
+            { z.LastComment = comment; z.Rec = rec; return; } // ID writeback echo — adopt, don't disarm
+
+            bool changed = comment != z.LastComment || !geomSame;
+            z.Top = top; z.Bottom = bottom; z.LastComment = comment;
+
             if ((z.Status == ZStatus.Armed || z.Status == ZStatus.WaitingConfirm) && changed)
             {
                 CancelZoneOrders(z, "zone_edited");
                 z.Status = ZStatus.Draft;
             }
 
-            List<string> errors;
-            var rec = ZoneRecord.TryParse(comment, Server.Time, out errors);
             if (rec == null)
             {
-                if (errors.Count > 0 && commentChanged)
+                if (errors.Count > 0)
                 {
                     z.Status = ZStatus.Rejected;
                     Journal("zone_rejected", z, ("errors", string.Join(" | ", errors)));
-                    Paint(rect, "#808080");
+                    Paint(rect, z, "#808080");
                 }
-                else if (string.IsNullOrWhiteSpace(comment))
-                    z.Status = ZStatus.Draft; // silent draft
+                else if (string.IsNullOrWhiteSpace(comment) && z.Status != ZStatus.Killed)
+                    z.Status = ZStatus.Draft;
                 z.Rec = null;
                 return;
             }
 
-            // FTMO Normal law: no weekend holds, ever.
             if (rec.Weekend == WeekendPolicy.Hold)
             {
                 z.Status = ZStatus.Rejected; z.Rec = null;
-                Journal("zone_rejected", z, ("errors", "WKD:HOLD not allowed on FTMO Normal - all zones flatten before the weekend"));
-                Paint(rect, "#808080");
+                Journal("zone_rejected", z, ("errors", "WKD:HOLD not allowed on FTMO Normal"));
+                Paint(rect, z, "#808080");
                 return;
             }
 
@@ -193,9 +263,18 @@ namespace cAlgo.Robots
             if (string.IsNullOrEmpty(rec.Id))
             {
                 rec.Id = ZoneRecord.NewId();
-                WriteBackId(rect, rec.Id);
+                WriteBackId(rect, z, rec.Id);
             }
             z.Id = rec.Id;
+            int tLoad; DateTime ltLoad;
+            if (_loadedTouches.TryGetValue(z.Id, out tLoad)) { z.TouchesUsed = tLoad; _loadedTouches.Remove(z.Id); }
+            if (_loadedLastTouch.TryGetValue(z.Id, out ltLoad)) { z.LastTouchUtc = ltLoad; _loadedLastTouch.Remove(z.Id); }
+
+            if (z.Status == ZStatus.Killed) return; // sticky: comment was re-saved? changed==true clears via Draft below
+            if (changed && z.Status != ZStatus.Draft && z.Status != ZStatus.Rejected &&
+                z.Status != ZStatus.Armed && z.Status != ZStatus.WaitingConfirm)
+                return; // Filled/Retired/Expired keep their status; edits there are cosmetic
+
             TryArm(z, rect);
         }
 
@@ -206,16 +285,53 @@ namespace cAlgo.Robots
             CancelZoneOrders(z, "zone_removed");
             _zones.Remove(name);
             Journal("zone_removed", z);
+            MarkStateDirty();
         }
 
         // ============================================================ arming
+        private bool ArmingBlocked(out string why)
+        {
+            var now = Server.Time;
+            if (_killLatched) { why = "kill latched"; return true; }
+            if (_tzBroken) { why = "timezone unavailable"; return true; }
+            if (_accountTripped) { why = "account breaker"; return true; }
+            if (now < _dailyTrippedUntilUtc) { why = "daily cut-out"; return true; }
+            if (now < _anchorLateBlockUntilUtc) { why = "late day-anchor safe mode"; return true; }
+            if (_newsSuspended) { why = "news window"; return true; }
+            if (InWeekendNoArmWindow(now)) { why = "weekend no-arm window"; return true; }
+            why = ""; return false;
+        }
+
+        private bool InWeekendNoArmWindow(DateTime nowUtc)
+        {
+            if (nowUtc.DayOfWeek == DayOfWeek.Friday && nowUtc.TimeOfDay >= _fridayCut) return true;
+            if (nowUtc.DayOfWeek == DayOfWeek.Saturday) return true;
+            if (nowUtc.DayOfWeek == DayOfWeek.Sunday && nowUtc.TimeOfDay < new TimeSpan(21, 0, 0)) return true;
+            return false;
+        }
+
         private void TryArm(Zone z, ChartRectangle rect)
         {
-            if (_killLatched || _accountTripped || Server.Time < _dailyTrippedUntilUtc || _newsSuspended)
-            { JournalRejectOnce(z, "blocked", _killLatched ? "kill latched" : _accountTripped ? "account breaker" :
-                Server.Time < _dailyTrippedUntilUtc ? "daily cut-out" : "news window"); return; }
+            if (z.Rec == null) return;
+            string why;
+            if (ArmingBlocked(out why)) { JournalRejectOnce(z, "blocked", why); return; }
+            if (Server.Time < z.CooldownUntilUtc) { JournalRejectOnce(z, "cooldown", "recent close on this zone"); return; }
+
+            // Existing-order adoption (audit fix: restart must not double-place)
+            if (!string.IsNullOrEmpty(z.Id) &&
+                PendingOrders.Any(o => (o.Label ?? "") == LabelPrefix + z.Id && o.SymbolName == SymbolName))
+            {
+                if (z.Status != ZStatus.Armed)
+                { z.Status = ZStatus.Armed; Journal("zone_adopted", z, ("note", "existing resting order found - adopted, not re-placed")); Paint(rect, z, z.Rec.Direction == Direction.Buy ? "#0ca30c" : "#d03b3b"); }
+                return;
+            }
+            if (Positions.Any(p => (p.Label ?? "") == LabelPrefix + z.Id && p.SymbolName == SymbolName))
+            { if (z.Status != ZStatus.Filled) { z.Status = ZStatus.Filled; Journal("zone_adopted", z, ("note", "existing position found")); } return; }
 
             double atr = _dailyAtr.Result.LastValue;
+            if (double.IsNaN(atr) || atr <= 0)
+            { JournalRejectOnce(z, "blocked", "daily ATR unavailable/NaN - refusing to arm"); return; }
+
             double mid = (Symbol.Bid + Symbol.Ask) / 2.0;
             var geo = new ZoneGeometry { Symbol = SymbolName, Top = z.Top, Bottom = z.Bottom, Direction = z.Rec.Direction };
             var others = _zones.Values.Where(o => o != z && o.Rec != null &&
@@ -223,19 +339,22 @@ namespace cAlgo.Robots
                          .Select(o => new ZoneGeometry { Symbol = SymbolName, Top = o.Top, Bottom = o.Bottom, Direction = o.Rec.Direction });
             var val = ZoneValidator.Validate(z.Rec, geo, atr, mid, Server.Time, others);
             if (!val.Ok)
-            { z.Status = ZStatus.Rejected; Journal("zone_rejected", z, ("errors", string.Join(" | ", val.Errors))); Paint(rect, "#808080"); return; }
-            foreach (var w in val.Warnings) Journal("zone_warning", z, ("warning", w));
+            { z.Status = ZStatus.Rejected; Journal("zone_rejected", z, ("errors", string.Join(" | ", val.Errors))); Paint(rect, z, "#808080"); return; }
+
+            // Passive-side gate (audit fix: never a marketable limit, never in-zone,
+            // never a post-stop instant re-entry). BUY zone: price must be fully
+            // above the zone; SELL zone: fully below.
+            bool buy = z.Rec.Direction == Direction.Buy;
+            bool passive = buy ? Symbol.Bid > z.Top : Symbol.Ask < z.Bottom;
+            if (!passive) { JournalRejectOnce(z, "waiting", "price not on the approach side of the zone - will arm when it is"); return; }
 
             var spreadPips = (Symbol.Ask - Symbol.Bid) / Symbol.PipSize;
             if (spreadPips > MaxSpreadPips)
-            { JournalRejectOnce(z, "anomaly", Fmt("spread {0:0.0} pips > max {1:0.0} - waiting", spreadPips, MaxSpreadPips)); return; }
+            { JournalRejectOnce(z, "anomaly", Fmt("spread {0:0.0} pips > max {1:0.0}", spreadPips, MaxSpreadPips)); return; }
 
             var capErrors = CheckCapsLive(z.Rec);
-            if (capErrors.Count > 0)
-            { JournalRejectOnce(z, "caps", string.Join(" | ", capErrors)); return; }
+            if (capErrors.Count > 0) { JournalRejectOnce(z, "caps", string.Join(" | ", capErrors)); return; }
 
-            // ---- prices ----
-            bool buy = z.Rec.Direction == Direction.Buy;
             double height = z.Top - z.Bottom;
             double entry = z.Rec.EntryAt == EntryPrice.Mid ? (z.Top + z.Bottom) / 2.0 : (buy ? z.Top : z.Bottom);
             double sl = buy ? z.Bottom - height * SlBufferFrac : z.Top + height * SlBufferFrac;
@@ -244,36 +363,33 @@ namespace cAlgo.Robots
 
             var sizing = ComputeVolumeLive(z.Rec, stopDist);
             if (!sizing.Ok)
-            { z.Status = ZStatus.Rejected; Journal("zone_rejected", z, ("errors", string.Join(" | ", sizing.Errors))); Paint(rect, "#808080"); return; }
+            { z.Status = ZStatus.Rejected; Journal("zone_rejected", z, ("errors", string.Join(" | ", sizing.Errors))); Paint(rect, z, "#808080"); return; }
             foreach (var w in sizing.Warnings) Journal("zone_warning", z, ("warning", w));
 
             if (z.Rec.Entry == EntryStyle.T1RestingLimit)
             {
-                var label = LabelPrefix + z.Id;
                 var expiry = OrderExpiryUtc(z.Rec);
-                double slPips = stopDist / Symbol.PipSize;
-                double tpPips = Math.Abs(tp - entry) / Symbol.PipSize;
+                if (expiry <= Server.Time) { JournalRejectOnce(z, "blocked", "no valid order window before expiry/weekend"); return; }
                 var res = PlaceLimitOrder(buy ? TradeType.Buy : TradeType.Sell, SymbolName,
-                                          sizing.VolumeUnits, entry, label, slPips, tpPips, expiry);
-                if (!res.IsSuccessful)
-                { JournalRejectOnce(z, "order_rejected", res.Error.ToString()); return; }
+                                          sizing.VolumeUnits, entry, LabelPrefix + z.Id,
+                                          stopDist / Symbol.PipSize, Math.Abs(tp - entry) / Symbol.PipSize, expiry);
+                if (!res.IsSuccessful) { JournalRejectOnce(z, "order_rejected", res.Error.ToString()); return; }
                 z.Status = ZStatus.Armed;
                 Journal("zone_armed", z, ("entry", F(entry)), ("sl", F(sl)), ("tp", F(tp)),
                         ("volume", F(sizing.VolumeUnits)), ("risk_pct", F(sizing.AchievedRiskPercent)),
-                        ("order_expiry_utc", expiry.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)),
-                        ("style", "T1"));
-                Paint(rect, buy ? "#0ca30c" : "#d03b3b");
+                        ("order_expiry_utc", expiry.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)), ("style", "T1"));
+                Paint(rect, z, buy ? "#0ca30c" : "#d03b3b");
             }
-            else // T2: no resting order; wait for touch, then one M15 close in our favour
+            else
             {
                 z.Status = ZStatus.WaitingConfirm;
-                Journal("zone_armed", z, ("entry", "on-confirm"), ("sl", F(sl)), ("tp", F(tp)),
-                        ("volume", F(sizing.VolumeUnits)), ("style", "T2"));
-                Paint(rect, "#eda100");
+                Journal("zone_armed", z, ("entry", "on-confirm"), ("style", "T2"),
+                        ("volume_planned", F(sizing.VolumeUnits)));
+                Paint(rect, z, "#eda100");
             }
         }
 
-        // ============================================================ ticks: touches + T2
+        // ============================================================ ticks: touches
         protected override void OnTick()
         {
             foreach (var z in _zones.Values)
@@ -288,7 +404,8 @@ namespace cAlgo.Robots
                 {
                     z.InTouch = true;
                     z.TouchesUsed++;
-                    SaveState();
+                    z.LastTouchUtc = Server.Time;
+                    MarkStateDirty();
                     Journal("touch", z, ("n", z.TouchesUsed.ToString(CultureInfo.InvariantCulture)),
                             ("spread_pips", F((Symbol.Ask - Symbol.Bid) / Symbol.PipSize)));
                     if (z.TouchesUsed > z.Rec.TouchBudget && (z.Status == ZStatus.Armed || z.Status == ZStatus.WaitingConfirm))
@@ -304,9 +421,11 @@ namespace cAlgo.Robots
 
         private void CheckT2Confirms()
         {
-            // acts once per closed M15 bar
             int last = _m15Bars.Count - 2; if (last < 1) return;
             var barTime = _m15Bars.OpenTimes[last]; if (barTime == _lastM15Seen) return;
+            // do not consume bars while suspended (audit fix): evaluate later
+            string why;
+            if (ArmingBlocked(out why)) return;
             _lastM15Seen = barTime;
             double close = _m15Bars.ClosePrices[last];
 
@@ -314,17 +433,21 @@ namespace cAlgo.Robots
             {
                 if (z.Rec == null || z.Status != ZStatus.WaitingConfirm) continue;
                 if (z.TouchesUsed == 0 || z.TouchesUsed > z.Rec.TouchBudget) continue;
+                // recency: confirm must come within T2ConfirmMaxBars of the last touch
+                if (z.LastTouchUtc == DateTime.MinValue ||
+                    (Server.Time - z.LastTouchUtc).TotalMinutes > T2ConfirmMaxBars * 15) continue;
                 bool buy = z.Rec.Direction == Direction.Buy;
-                double zmid = (z.Top + z.Bottom) / 2.0;
-                bool confirmed = buy ? close > z.Top : close < z.Bottom; // closed back beyond the zone in our favour
-                if (!confirmed) continue;
-                if (_newsSuspended || _killLatched || _accountTripped || Server.Time < _dailyTrippedUntilUtc) continue;
+                if (!(buy ? close > z.Top : close < z.Bottom)) continue;
 
                 double height = z.Top - z.Bottom;
-                double sl = buy ? z.Bottom - height * SlBufferFrac : z.Top + height * SlBufferFrac;
                 double entry = buy ? Symbol.Ask : Symbol.Bid;
+                // distance guard: no chasing far breakouts (audit fix)
+                if (buy ? entry > z.Top + height * T2MaxChaseFrac : entry < z.Bottom - height * T2MaxChaseFrac)
+                { Journal("t2_entry_skipped", z, ("reason", "price too far from zone at confirm")); continue; }
+                double sl = buy ? z.Bottom - height * SlBufferFrac : z.Top + height * SlBufferFrac;
                 double stopDist = Math.Abs(entry - sl); if (stopDist <= 0) continue;
                 double tp = buy ? entry + z.Rec.RewardRiskTarget * stopDist : entry - z.Rec.RewardRiskTarget * stopDist;
+
                 var sizing = ComputeVolumeLive(z.Rec, stopDist);
                 var capErr = CheckCapsLive(z.Rec);
                 if (!sizing.Ok || capErr.Count > 0)
@@ -333,128 +456,175 @@ namespace cAlgo.Robots
                 var res = ExecuteMarketOrder(buy ? TradeType.Buy : TradeType.Sell, SymbolName, sizing.VolumeUnits,
                                              LabelPrefix + z.Id, stopDist / Symbol.PipSize, Math.Abs(tp - entry) / Symbol.PipSize);
                 if (res.IsSuccessful)
-                {
-                    z.Status = ZStatus.Filled;
-                    Journal("t2_entered", z, ("entry", F(entry)), ("sl", F(sl)), ("tp", F(tp)), ("volume", F(sizing.VolumeUnits)));
-                }
+                { z.Status = ZStatus.Filled; Journal("t2_entered", z, ("entry", F(entry)), ("sl", F(sl)), ("tp", F(tp)), ("volume", F(sizing.VolumeUnits))); }
                 else Journal("t2_entry_blocked", z, ("errors", res.Error.ToString()));
             }
         }
 
-        // ============================================================ timer: the guardian loop
+        // ============================================================ timer: guardian loop
         protected override void OnTimer()
+        {
+            try { TimerBody(); }
+            catch (Exception ex) { Journal("timer_error", null, ("error", ex.Message)); }
+        }
+
+        private void TimerBody()
         {
             var now = Server.Time;
 
-            if (--_secToHeartbeat <= 0) { _secToHeartbeat = HeartbeatSeconds; Heartbeat(); }
+            if (!_hbDisabled && --_secToHeartbeat <= 0) { _secToHeartbeat = HeartbeatSeconds; Heartbeat(); }
 
-            // kill file — checked every second, latches
             bool killNow = File.Exists(_killPath);
             if (killNow && !_killLatched)
             {
-                _killLatched = true; SaveState();
-                Journal("killswitch", null, ("action", "flatten+cancel all ZC, arming latched off"));
+                _killLatched = true; MarkStateDirty();
+                Journal("killswitch", null, ("action", "flatten+cancel all ZC; arming latched off"));
                 FlattenEverything("killswitch");
             }
             else if (!killNow && _killLatched)
             {
-                _killLatched = false; SaveState();
-                Journal("killswitch_cleared", null, ("note", "zones stay disarmed; re-arm by re-saving each comment"));
-                foreach (var z in _zones.Values) if (z.Status == ZStatus.Killed) z.Status = ZStatus.Draft;
+                _killLatched = false; MarkStateDirty();
+                Journal("killswitch_cleared", null, ("note", "zones stay KILLED until each comment is re-saved (deliberate)"));
             }
 
             UpdateBreakers(now);
             UpdateNewsWindow(now);
-            FridayFlattenCheck(now);
+            SessionFlattenCheck(now);
             ExpirySweep(now);
             CheckT2Confirms();
             SyncFills();
 
+            // debounced edit processing (audit fix: no order churn while dragging)
+            foreach (var z in _zones.Values.Where(x => x.PendingSyncUtc != DateTime.MinValue &&
+                         (now - x.PendingSyncUtc).TotalSeconds >= EditQuietSeconds).ToList())
+            {
+                var rect = Chart.Objects.OfType<ChartRectangle>().FirstOrDefault(r => r.Name == z.RectName);
+                if (rect != null) SyncZone(rect);
+                else z.PendingSyncUtc = DateTime.MinValue;
+            }
+
+            // periodic re-arm pass (audit fix: zones must come back after news
+            // windows, cut-out lapse, weekend, cooldowns — without manual edits)
+            if ((now - _lastRearmPassUtc).TotalSeconds >= 5)
+            {
+                _lastRearmPassUtc = now;
+                string why;
+                if (!ArmingBlocked(out why))
+                    foreach (var z in _zones.Values.Where(x => x.Status == ZStatus.Draft && x.Rec != null).ToList())
+                    {
+                        var rect = Chart.Objects.OfType<ChartRectangle>().FirstOrDefault(r => r.Name == z.RectName);
+                        if (rect != null) TryArm(z, rect);
+                    }
+            }
+
+            if (_stateDirty && (now - _lastStateFlushUtc).TotalSeconds >= 5) FlushState();
+
             if (now.Hour >= DigestHourUtc && _lastDigestUtc.Date != now.Date)
-            { _lastDigestUtc = now; SaveState(); Digest(); }
+            { _lastDigestUtc = now; MarkStateDirty(); Digest(); }
         }
 
         private void UpdateBreakers(DateTime nowUtc)
         {
-            // Prague-midnight day anchor, FTMO-style: reference = max(balance, equity) at day start
+            if (_tzBroken) return;
             var prg = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, _prague).Date;
             if (prg != _dayStartDatePrague)
             {
+                bool late = _dayStartDatePrague != DateTime.MinValue && (prg - _dayStartDatePrague).TotalDays > 1.5;
+                bool firstEver = _dayStartDatePrague == DateTime.MinValue;
                 _dayStartDatePrague = prg;
                 _dayStartRef = Math.Max(Account.Balance, Account.Equity);
-                SaveState();
-                Journal("day_anchor", null, ("ref", F(_dayStartRef)), ("prague_date", prg.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)));
+                MarkStateDirty();
+                Journal("day_anchor", null, ("ref", F(_dayStartRef)),
+                        ("prague_date", prg.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)));
+                // Anchor set late (bot was down over midnight): the true FTMO anchor is
+                // unknown and may be higher — safe mode: no NEW arming for this Prague day.
+                if (late || (firstEver && nowUtc.TimeOfDay > TimeSpan.FromHours(1) &&
+                             TimeZoneInfo.ConvertTimeFromUtc(nowUtc, _prague).TimeOfDay > TimeSpan.FromHours(6)))
+                {
+                    _anchorLateBlockUntilUtc = TimeZoneInfo.ConvertTimeToUtc(prg.AddDays(1), _prague);
+                    Journal("anchor_late", null, ("action", "no new arming until next Prague midnight; existing positions keep broker stops"));
+                }
             }
 
             if (!_accountTripped && Account.Equity <= _initialBalance * (1 - AccountBreakerPercent / 100.0))
             {
-                _accountTripped = true; SaveState();
+                _accountTripped = true; MarkStateDirty();
                 Journal("account_breaker", null, ("equity", F(Account.Equity)),
-                        ("limit", F(_initialBalance * (1 - AccountBreakerPercent / 100.0))),
-                        ("action", "cancel all ZC orders; positions keep broker-side stops; written review required"));
-                CancelAllZcOrders("account_breaker");
+                        ("action", "FLATTEN ALL - written review required to reset (delete 'accountTripped' line in state file after review)"));
+                FlattenEverything("account_breaker");
             }
 
             if (nowUtc >= _dailyTrippedUntilUtc &&
-                _dayStartRef - Account.Equity >= _initialBalance * DailyCutoutPercent / 100.0)
+                _dayStartRef > 0 && _dayStartRef - Account.Equity >= _initialBalance * DailyCutoutPercent / 100.0)
             {
-                // latch until next Prague midnight, expressed in UTC
-                var nextPragueMidnight = TimeZoneInfo.ConvertTimeToUtc(prg.AddDays(1), _prague);
-                _dailyTrippedUntilUtc = nextPragueMidnight; SaveState();
+                _dailyTrippedUntilUtc = TimeZoneInfo.ConvertTimeToUtc(prg.AddDays(1), _prague);
+                MarkStateDirty();
                 Journal("daily_cutout", null, ("drawdown", F(_dayStartRef - Account.Equity)),
-                        ("until_utc", nextPragueMidnight.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)),
-                        ("action", "no new risk today; resting ZC orders cancelled; positions keep broker-side stops"));
-                CancelAllZcOrders("daily_cutout");
+                        ("until_utc", _dailyTrippedUntilUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)),
+                        ("action", "FLATTEN ALL - protects the FTMO -5% floor (audit fix: freezing alone stranded open risk)"));
+                FlattenEverything("daily_cutout");
             }
         }
 
         private void UpdateNewsWindow(DateTime nowUtc)
         {
-            bool inWindow = false;
+            bool inWindow = false; DateTime newest = DateTime.MinValue; bool haveFile = false;
             try
             {
                 if (File.Exists(_newsPath))
+                {
+                    haveFile = true;
                     foreach (var line in File.ReadAllLines(_newsPath))
                     {
                         var t = line.Trim(); if (t.Length == 0 || t.StartsWith("#")) continue;
                         DateTime ev;
                         if (DateTime.TryParseExact(t, "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture,
-                            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out ev) &&
-                            Math.Abs((nowUtc - ev).TotalMinutes) <= NewsPauseMinutes)
-                        { inWindow = true; break; }
+                            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out ev))
+                        {
+                            if (ev > newest) newest = ev;
+                            if (Math.Abs((nowUtc - ev).TotalMinutes) <= NewsPauseMinutes) inWindow = true;
+                        }
                     }
+                }
             }
             catch (Exception ex) { Print("news read failed: {0}", ex.Message); }
+
+            // stale/missing news.txt fails LOUD, not silent (audit fix)
+            if ((!haveFile || newest < nowUtc.AddDays(-7)) && (nowUtc - _lastNewsStaleWarnUtc).TotalHours >= 24)
+            {
+                _lastNewsStaleWarnUtc = nowUtc;
+                Journal("news_file_stale", null, ("msg", haveFile ? "newest event older than 7 days - refresh news.txt (Sunday routine)" : "news.txt missing - no news protection"));
+            }
 
             if (inWindow && !_newsSuspended)
             {
                 _newsSuspended = true;
-                Journal("news_pause_start", null, ("action", "resting ZC orders cancelled; re-arm after window"));
+                Journal("news_pause_start", null);
                 CancelAllZcOrders("news_pause");
+                if (NewsFlattenPositions)
+                    foreach (var p in Positions.Where(p => (p.Label ?? "").StartsWith(LabelPrefix) && p.SymbolName == SymbolName).ToList())
+                    { var r = p.Close(); Journal(r.IsSuccessful ? "news_position_closed" : "close_failed", null, ("label", p.Label)); }
+                else
+                    foreach (var p in Positions.Where(p => (p.Label ?? "").StartsWith(LabelPrefix) && p.SymbolName == SymbolName))
+                        Journal("news_position_alert", null, ("label", p.Label), ("note", "SL/TP execution inside a restricted window can breach FTMO funded rules"));
             }
             else if (!inWindow && _newsSuspended)
             {
                 _newsSuspended = false;
-                Journal("news_pause_end", null, ("action", "re-arming eligible zones"));
-                RearmAll();
+                Journal("news_pause_end", null, ("note", "periodic pass will re-arm eligible zones"));
             }
         }
 
-        private void FridayFlattenCheck(DateTime nowUtc)
+        private void SessionFlattenCheck(DateTime nowUtc)
         {
-            TimeSpan cut;
-            if (!TimeSpan.TryParseExact(FridayFlattenUtc, "hh\\:mm", CultureInfo.InvariantCulture, out cut))
-                cut = new TimeSpan(20, 30, 0);
-            if (nowUtc.DayOfWeek == DayOfWeek.Friday && nowUtc.TimeOfDay >= cut)
-            {
-                bool anything = Positions.Any(p => (p.Label ?? "").StartsWith(LabelPrefix) && p.SymbolName == SymbolName) ||
-                                PendingOrders.Any(o => (o.Label ?? "").StartsWith(LabelPrefix) && o.SymbolName == SymbolName);
-                if (anything)
-                {
-                    Journal("weekend_flatten", null, ("rule", "FTMO Normal: no weekend holds"));
-                    FlattenEverything("weekend_flatten");
-                }
-            }
+            bool due = (nowUtc.DayOfWeek == DayOfWeek.Friday && nowUtc.TimeOfDay >= _fridayCut) ||
+                       (_dailyCutEnabled && nowUtc.TimeOfDay >= _dailyCut && nowUtc.DayOfWeek != DayOfWeek.Saturday && nowUtc.DayOfWeek != DayOfWeek.Sunday);
+            if (!due) return;
+            bool anything = Positions.Any(p => (p.Label ?? "").StartsWith(LabelPrefix) && p.SymbolName == SymbolName) ||
+                            PendingOrders.Any(o => (o.Label ?? "").StartsWith(LabelPrefix) && o.SymbolName == SymbolName);
+            if (!anything) return;
+            Journal("session_flatten", null, ("rule", nowUtc.DayOfWeek == DayOfWeek.Friday ? "FTMO Normal: no weekend holds" : "no holds through the >2h daily break"));
+            FlattenEverything("session_flatten");
         }
 
         private void ExpirySweep(DateTime nowUtc)
@@ -463,11 +633,7 @@ namespace cAlgo.Robots
             {
                 if (z.Rec == null) continue;
                 if (nowUtc > z.Rec.ExpiryUtc && (z.Status == ZStatus.Armed || z.Status == ZStatus.WaitingConfirm || z.Status == ZStatus.Draft))
-                {
-                    CancelZoneOrders(z, "expired");
-                    z.Status = ZStatus.Expired;
-                    Journal("zone_expired", z);
-                }
+                { CancelZoneOrders(z, "expired"); z.Status = ZStatus.Expired; Journal("zone_expired", z); }
             }
         }
 
@@ -475,20 +641,26 @@ namespace cAlgo.Robots
         {
             foreach (var z in _zones.Values)
             {
-                if (z.Rec == null) continue;
+                if (z.Rec == null || string.IsNullOrEmpty(z.Id)) continue;
                 bool hasPos = Positions.Any(p => (p.Label ?? "") == LabelPrefix + z.Id && p.SymbolName == SymbolName);
-                if (hasPos && z.Status == ZStatus.Armed)
-                { z.Status = ZStatus.Filled; Journal("zone_filled", z); }
+                if (hasPos && z.Status != ZStatus.Filled)
+                {
+                    // covers the cancel-vs-fill race too (audit fix): a position always wins
+                    if (z.Status == ZStatus.Retired || z.Status == ZStatus.Draft)
+                        Journal("fill_race_note", z, ("was", z.Status.ToString()));
+                    z.Status = ZStatus.Filled;
+                    Journal("zone_filled", z);
+                }
                 else if (!hasPos && z.Status == ZStatus.Filled)
                 {
-                    var stillPending = PendingOrders.Any(o => (o.Label ?? "") == LabelPrefix + z.Id && o.SymbolName == SymbolName);
+                    bool stillPending = PendingOrders.Any(o => (o.Label ?? "") == LabelPrefix + z.Id && o.SymbolName == SymbolName);
                     if (!stillPending)
                     {
                         z.Status = z.TouchesUsed >= z.Rec.TouchBudget ? ZStatus.Retired : ZStatus.Draft;
+                        z.CooldownUntilUtc = Server.Time.AddMinutes(RearmCooldownMinutes); // audit fix: no instant re-entry
+                        MarkStateDirty();
                         Journal("position_closed", z, ("touches_used", z.TouchesUsed.ToString(CultureInfo.InvariantCulture)),
-                                ("next", z.Status.ToString()));
-                        // Draft → the guardian loop re-arms it on the next SyncZone pass if budget remains
-                        if (z.Status == ZStatus.Draft) RearmZoneSoon(z);
+                                ("next", z.Status.ToString()), ("cooldown_min", RearmCooldownMinutes.ToString(CultureInfo.InvariantCulture)));
                     }
                 }
             }
@@ -497,121 +669,115 @@ namespace cAlgo.Robots
         // ============================================================ order plumbing
         private DateTime OrderExpiryUtc(ZoneRecord rec)
         {
-            // broker-side expiry = min(zone expiry, next Friday flatten) — a dead VPS
-            // can then never fill a stale idea (audit fix)
-            var expiry = rec.ExpiryUtc;
             var now = Server.Time;
             int daysToFriday = ((int)DayOfWeek.Friday - (int)now.DayOfWeek + 7) % 7;
-            TimeSpan cut;
-            if (!TimeSpan.TryParseExact(FridayFlattenUtc, "hh\\:mm", CultureInfo.InvariantCulture, out cut))
-                cut = new TimeSpan(20, 30, 0);
-            var friday = now.Date.AddDays(daysToFriday).Add(cut);
+            var friday = now.Date.AddDays(daysToFriday).Add(_fridayCut);
             if (friday <= now) friday = friday.AddDays(7);
-            return expiry < friday ? expiry : friday;
+            var cap = rec.ExpiryUtc < friday ? rec.ExpiryUtc : friday;
+            if (_dailyCutEnabled)
+            {
+                var todayCut = now.Date.Add(_dailyCut);
+                if (todayCut > now && todayCut < cap) cap = todayCut; // never survive the daily break either
+            }
+            return cap;
         }
 
         private void CancelZoneOrders(Zone z, string reason)
         {
+            if (string.IsNullOrEmpty(z.Id)) return;
             foreach (var o in PendingOrders.Where(o => (o.Label ?? "") == LabelPrefix + z.Id && o.SymbolName == SymbolName).ToList())
-            { o.Cancel(); Journal("order_cancelled", z, ("reason", reason)); }
+            {
+                var r = o.Cancel();
+                if (!r.IsSuccessful) { r = o.Cancel(); }
+                Journal(r.IsSuccessful ? "order_cancelled" : "cancel_failed", z, ("reason", reason));
+            }
         }
 
         private void CancelAllZcOrders(string reason)
         {
             foreach (var o in PendingOrders.Where(o => (o.Label ?? "").StartsWith(LabelPrefix) && o.SymbolName == SymbolName).ToList())
-            { o.Cancel(); }
+            { var r = o.Cancel(); if (!r.IsSuccessful) r = o.Cancel(); if (!r.IsSuccessful) Journal("cancel_failed", null, ("label", o.Label)); }
             foreach (var z in _zones.Values)
-                if (z.Status == ZStatus.Armed) { z.Status = ZStatus.Draft; }
+                if (z.Status == ZStatus.Armed) z.Status = ZStatus.Draft;
             Journal("orders_cancelled_all", null, ("reason", reason));
         }
 
         private void FlattenEverything(string reason)
         {
             foreach (var o in PendingOrders.Where(o => (o.Label ?? "").StartsWith(LabelPrefix) && o.SymbolName == SymbolName).ToList())
-                o.Cancel();
+            { var r = o.Cancel(); if (!r.IsSuccessful) r = o.Cancel(); if (!r.IsSuccessful) Journal("cancel_failed", null, ("label", o.Label)); }
             foreach (var p in Positions.Where(p => (p.Label ?? "").StartsWith(LabelPrefix) && p.SymbolName == SymbolName).ToList())
-                p.Close();
+            { var r = p.Close(); if (!r.IsSuccessful) r = p.Close(); if (!r.IsSuccessful) Journal("close_failed", null, ("label", p.Label), ("note", "CLOSE MANUALLY NOW - flatten did not complete")); }
             foreach (var z in _zones.Values)
                 if (z.Status == ZStatus.Armed || z.Status == ZStatus.WaitingConfirm || z.Status == ZStatus.Filled)
+                {
                     z.Status = reason == "killswitch" ? ZStatus.Killed : ZStatus.Draft;
+                    z.CooldownUntilUtc = Server.Time.AddMinutes(RearmCooldownMinutes);
+                }
             Journal("flatten_all", null, ("reason", reason));
-        }
-
-        private void RearmAll()
-        {
-            _selfWrite = false;
-            foreach (var rect in Chart.Objects.OfType<ChartRectangle>()) SyncZone(rect);
-        }
-
-        private void RearmZoneSoon(Zone z)
-        {
-            var rect = Chart.Objects.OfType<ChartRectangle>().FirstOrDefault(r => r.Name == z.RectName);
-            if (rect != null && z.Rec != null) TryArm(z, rect);
         }
 
         private void ReconcileBrokerState()
         {
-            // Orders/positions labelled ZC: with no matching rectangle on this chart:
-            // cancel orders (safe), keep positions but alarm loudly (human decides).
             var known = new HashSet<string>(Chart.Objects.OfType<ChartRectangle>()
-                        .Select(r => { List<string> e; var rec = ZoneRecord.TryParse(r.Comment ?? "", Server.Time, out e); return rec != null ? LabelPrefix + rec.Id : null; })
+                        .Select(r => { List<string> e; var rec = ZoneRecord.TryParse(r.Comment ?? "", Server.Time, out e); return rec != null && !string.IsNullOrEmpty(rec.Id) ? LabelPrefix + rec.Id : null; })
                         .Where(x => x != null));
             foreach (var o in PendingOrders.Where(o => (o.Label ?? "").StartsWith(LabelPrefix) && o.SymbolName == SymbolName).ToList())
                 if (!known.Contains(o.Label))
-                { o.Cancel(); Journal("orphan_order_cancelled", null, ("label", o.Label)); }
+                { var r = o.Cancel(); Journal(r.IsSuccessful ? "orphan_order_cancelled" : "cancel_failed", null, ("label", o.Label)); }
             foreach (var p in Positions.Where(p => (p.Label ?? "").StartsWith(LabelPrefix) && p.SymbolName == SymbolName))
                 if (!known.Contains(p.Label))
-                    Journal("orphan_position_alert", null, ("label", p.Label), ("note", "position without a zone - review manually; broker-side SL/TP still active"));
+                    Journal("orphan_position_alert", null, ("label", p.Label), ("note", "position without a zone - review manually; broker SL/TP still active"));
         }
 
-        // ============================================================ live caps & sizing
+        // ============================================================ caps & sizing
         private List<string> CheckCapsLive(ZoneRecord rec)
         {
             var open = new List<OpenExposure>();
             foreach (var p in Positions.Where(p => (p.Label ?? "").StartsWith(LabelPrefix)))
-            {
-                // recover configured risk from label-linked zone if known; else estimate 1.0%
-                double rp = 1.0;
-                var z = _zones.Values.FirstOrDefault(x => x.Rec != null && LabelPrefix + x.Id == p.Label);
-                if (z != null) rp = z.Rec.RiskPercent;
-                open.Add(new OpenExposure { Symbol = p.SymbolName, Direction = p.TradeType == TradeType.Buy ? Direction.Buy : Direction.Sell, RiskPercentAtEntry = rp });
-            }
-            // pending ZC orders count toward concurrency too (they can all fill)
+                open.Add(new OpenExposure { Symbol = p.SymbolName, Direction = p.TradeType == TradeType.Buy ? Direction.Buy : Direction.Sell, RiskPercentAtEntry = RiskOfLabel(p.Label) });
+            // pendings reserve capacity too (deliberately conservative: all could fill)
             foreach (var o in PendingOrders.Where(o => (o.Label ?? "").StartsWith(LabelPrefix)))
-            {
-                double rp = 1.0;
-                var z = _zones.Values.FirstOrDefault(x => x.Rec != null && LabelPrefix + x.Id == o.Label);
-                if (z != null) rp = z.Rec.RiskPercent;
-                open.Add(new OpenExposure { Symbol = o.SymbolName, Direction = o.TradeType == TradeType.Buy ? Direction.Buy : Direction.Sell, RiskPercentAtEntry = rp });
-            }
+                open.Add(new OpenExposure { Symbol = o.SymbolName, Direction = o.TradeType == TradeType.Buy ? Direction.Buy : Direction.Sell, RiskPercentAtEntry = RiskOfLabel(o.Label) });
             return RiskEngine.CheckCaps(rec, SymbolName, open);
+        }
+
+        private double RiskOfLabel(string label)
+        {
+            var z = _zones.Values.FirstOrDefault(x => x.Rec != null && LabelPrefix + x.Id == label);
+            return z != null ? z.Rec.RiskPercent : 1.0; // unknown → assume worst class cap
         }
 
         private SizingResult ComputeVolumeLive(ZoneRecord rec, double stopDistance)
         {
-            // risk anchored to FTMO initial balance (not floating equity): predictable
-            // % of the account you must protect
             return RiskEngine.ComputeVolume(rec, _initialBalance, stopDistance,
                 Symbol.TickSize, Symbol.TickValue, Symbol.VolumeInUnitsStep, Symbol.VolumeInUnitsMin);
         }
 
-        // ============================================================ chart + io helpers
-        private void Paint(ChartRectangle rect, string hex)
+        // ============================================================ helpers
+        private double RoundTick(double price) =>
+            Symbol.TickSize > 0 ? Math.Round(price / Symbol.TickSize) * Symbol.TickSize : price;
+
+        private void Paint(ChartRectangle rect, Zone z, string hex)
         {
-            try { _selfWrite = true; rect.Color = Color.FromHex(hex); }
-            catch { } finally { _selfWrite = false; }
+            if (z.LastPaintHex == hex) return;
+            try { rect.Color = Color.FromHex(hex); z.LastPaintHex = hex; } catch { }
         }
 
-        private void WriteBackId(ChartRectangle rect, string id)
+        private void WriteBackId(ChartRectangle rect, Zone z, string id)
         {
-            try { _selfWrite = true; rect.Comment = (rect.Comment ?? "").TrimEnd() + " ID:" + id; }
+            try
+            {
+                var newComment = (rect.Comment ?? "").TrimEnd() + " ID:" + id;
+                rect.Comment = newComment;
+                z.LastComment = newComment; // audit fix: our own write must not read as an edit
+            }
             catch (Exception ex) { Print("id writeback failed: {0}", ex.Message); }
-            finally { _selfWrite = false; }
         }
 
         private void JournalRejectOnce(Zone z, string kind, string detail)
         {
-            if ((Server.Time - z.LastRejectJournal).TotalMinutes < 30) return; // no spam
+            if ((Server.Time - z.LastRejectJournal).TotalMinutes < 30) return;
             z.LastRejectJournal = Server.Time;
             Journal("arm_blocked", z, ("kind", kind), ("detail", detail));
         }
@@ -624,23 +790,30 @@ namespace cAlgo.Robots
                     ("filled", filled.ToString(CultureInfo.InvariantCulture)),
                     ("equity", F(Account.Equity)), ("day_ref", F(_dayStartRef)),
                     ("daily_tripped", (Server.Time < _dailyTrippedUntilUtc).ToString()),
-                    ("account_tripped", _accountTripped.ToString()));
+                    ("account_tripped", _accountTripped.ToString()),
+                    ("kill_latched", _killLatched.ToString()));
         }
 
         private void Heartbeat()
         {
-            if (string.IsNullOrWhiteSpace(HeartbeatUrl)) return;
-            HttpShared.GetAsync(HeartbeatUrl).ContinueWith(t =>
+            if (string.IsNullOrWhiteSpace(HeartbeatUrl) || _hbDisabled) return;
+            try
             {
-                bool ok = t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion && t.Result.IsSuccessStatusCode;
-                if (t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion) t.Result.Dispose();
-                BeginInvokeOnMainThread(() =>
+                HttpShared.GetAsync(HeartbeatUrl).ContinueWith(t =>
                 {
-                    if (ok) { _hbFail = 0; return; }
-                    if (++_hbFail == 5) Journal("heartbeat_failing", null, ("failures", "5"));
-                });
-            }, System.Threading.Tasks.TaskContinuationOptions.ExecuteSynchronously);
+                    bool ok = t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion && t.Result.IsSuccessStatusCode;
+                    if (t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion) t.Result.Dispose();
+                    BeginInvokeOnMainThread(() =>
+                    {
+                        if (ok) { _hbFail = 0; return; }
+                        if (++_hbFail == 5) Journal("heartbeat_failing", null, ("failures", "5"));
+                    });
+                }, System.Threading.Tasks.TaskContinuationOptions.ExecuteSynchronously);
+            }
+            catch (Exception ex) { Print("heartbeat error: {0}", ex.Message); }
         }
+
+        private void MarkStateDirty() { _stateDirty = true; }
 
         private void LoadState()
         {
@@ -653,17 +826,17 @@ namespace cAlgo.Robots
                     switch (kv[0])
                     {
                         case "initialBalance": double.TryParse(kv[1], NumberStyles.Float, CultureInfo.InvariantCulture, out _initialBalance); break;
+                        case "dayStartRef": double.TryParse(kv[1], NumberStyles.Float, CultureInfo.InvariantCulture, out _dayStartRef); break;
+                        case "dayStartDatePrague": DateTime.TryParseExact(kv[1], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _dayStartDatePrague); break;
                         case "dailyTrippedUntilUtc": DateTime.TryParse(kv[1], CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out _dailyTrippedUntilUtc); break;
                         case "accountTripped": bool.TryParse(kv[1], out _accountTripped); break;
                         case "killLatched": bool.TryParse(kv[1], out _killLatched); break;
                         case "lastDigestUtc": DateTime.TryParse(kv[1], CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out _lastDigestUtc); break;
                         default:
                             if (kv[0].StartsWith("touches:"))
-                            {
-                                var name = kv[0].Substring(8); int n;
-                                if (int.TryParse(kv[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out n))
-                                { if (!_zones.ContainsKey(name)) _zones[name] = new Zone { RectName = name }; _zones[name].TouchesUsed = n; }
-                            }
+                            { int n; if (int.TryParse(kv[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out n)) _loadedTouches[kv[0].Substring(8)] = n; }
+                            else if (kv[0].StartsWith("lasttouch:"))
+                            { DateTime d; if (DateTime.TryParse(kv[1], CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out d)) _loadedLastTouch[kv[0].Substring(10)] = d; }
                             break;
                     }
                 }
@@ -671,19 +844,26 @@ namespace cAlgo.Robots
             catch (Exception ex) { Print("state load failed: {0}", ex.Message); }
         }
 
-        private void SaveState()
+        private void FlushState()
         {
             try
             {
                 var sb = new StringBuilder();
                 sb.Append("initialBalance=").Append(F(_initialBalance)).AppendLine();
+                sb.Append("dayStartRef=").Append(F(_dayStartRef)).AppendLine();
+                sb.Append("dayStartDatePrague=").Append(_dayStartDatePrague.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)).AppendLine();
                 sb.Append("dailyTrippedUntilUtc=").Append(_dailyTrippedUntilUtc.ToString("o", CultureInfo.InvariantCulture)).AppendLine();
                 sb.Append("accountTripped=").Append(_accountTripped).AppendLine();
                 sb.Append("killLatched=").Append(_killLatched).AppendLine();
                 sb.Append("lastDigestUtc=").Append(_lastDigestUtc.ToString("o", CultureInfo.InvariantCulture)).AppendLine();
-                foreach (var z in _zones.Values.Where(z => z.TouchesUsed > 0))
-                    sb.Append("touches:").Append(z.RectName).Append('=').Append(z.TouchesUsed.ToString(CultureInfo.InvariantCulture)).AppendLine();
+                foreach (var z in _zones.Values.Where(z => !string.IsNullOrEmpty(z.Id) && z.TouchesUsed > 0))
+                {
+                    sb.Append("touches:").Append(z.Id).Append('=').Append(z.TouchesUsed.ToString(CultureInfo.InvariantCulture)).AppendLine();
+                    if (z.LastTouchUtc != DateTime.MinValue)
+                        sb.Append("lasttouch:").Append(z.Id).Append('=').Append(z.LastTouchUtc.ToString("o", CultureInfo.InvariantCulture)).AppendLine();
+                }
                 File.WriteAllText(_statePath, sb.ToString());
+                _stateDirty = false; _lastStateFlushUtc = Server.Time;
             }
             catch (Exception ex) { Print("state save failed: {0}", ex.Message); }
         }
@@ -859,7 +1039,8 @@ namespace cAlgo.Robots
             {
                 var r = new ValidationResult();
                 if (geo.Top <= geo.Bottom) r.Errors.Add("rectangle has no height (top <= bottom)");
-                if (dailyAtr <= 0) { r.Errors.Add("daily ATR unavailable — cannot sanity-check; refuse to arm"); return r; }
+                if (double.IsNaN(dailyAtr) || dailyAtr <= 0)
+                { r.Errors.Add("daily ATR unavailable — cannot sanity-check; refuse to arm"); return r; }
                 if (!r.Ok) return r;
 
                 double hAtr = geo.Height / dailyAtr;
@@ -870,12 +1051,6 @@ namespace cAlgo.Robots
                                 : currentPrice < geo.Bottom ? geo.Bottom - currentPrice : 0.0;
                 if (distance / dailyAtr > MaxDistanceAtr)
                     r.Errors.Add(Fmt2("zone too far from price: {0:0.0}x daily ATR (max {1})", distance / dailyAtr, MaxDistanceAtr));
-                if (distance == 0.0) r.Warnings.Add("price is already inside the zone — it would arm hot (first touch immediate)");
-
-                if (rec.Direction == Direction.Sell && currentPrice > geo.Top)
-                    r.Warnings.Add("SELL zone is below current price — check the direction");
-                if (rec.Direction == Direction.Buy && currentPrice < geo.Bottom)
-                    r.Warnings.Add("BUY zone is above current price — check the direction");
 
                 if (rec.ExpiryUtc <= nowUtc) r.Errors.Add("expiry is in the past");
                 else if ((rec.ExpiryUtc - nowUtc).TotalDays > MaxExpiryDays) r.Errors.Add(Fmt2("expiry more than {0} days out", MaxExpiryDays));

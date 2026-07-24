@@ -30,8 +30,11 @@ demo account until every roadmap gate is passed.**
    - **Heartbeat ping URL** — create a SECOND check at healthchecks.io named
      `zone-exec` (period 2 min, grace 3 min) and paste its URL. Keep ShadowLogger's
      check separate.
-   - **FTMO initial balance** — enter your account's starting balance (e.g. 10000).
-     If left 0 it snapshots the current balance at first start.
+   - **FTMO initial balance** — enter your account's starting balance (e.g. 10000)
+     **explicitly**. (0 snapshots the current balance — only correct on a fresh account.)
+   - **Daily flatten UTC** — on index charts (GER40, US100…) set `20:40`: FTMO Normal
+     forbids holding through the index's ~3-hour nightly break, so those positions
+     close before it every day. Leave empty on FX charts.
    - Everything else: defaults are the audited values.
 6. **Start.** The journal `Documents\ZoneConsole\journal\<SYMBOL>-<TF>-exec.jsonl`
    gets an `exec_start` line; on a demo account it records `account_is_live: "demo"`.
@@ -47,11 +50,22 @@ demo account until every roadmap gate is passed.**
 - Editing an armed zone's rectangle or comment **disarms it first**, then re-validates —
   the drawing is the instruction.
 
-## What it will never do
+## What it will never do (v1.1, post-audit)
 
-Arm during a news window · hold into a weekend · exceed 0.5%/1.0% per trade, 3
-positions/orders, 3% total, ±2% per factor · keep trading after −3% today (Prague
-reset) or −8% from initial balance · trade at all while `KILL.txt` exists.
+Place a marketable limit (price must be on the approach side, outside the zone) ·
+re-enter immediately after a close (30-min cooldown + approach-side rule) · arm during
+a news window, after Friday's cut, on weekends, or through an index's nightly break ·
+exceed 0.5%/1.0% per trade, 3 positions+orders, 3% total, ±2% per factor · keep
+anything open after −3% today (Prague reset) or −8% from initial balance — **both now
+flatten, not just freeze** (protects FTMO's −5%/−10% floors) · trade while `KILL.txt`
+exists · leave a resting order alive when the bot is dead (broker-side expiry, capped
+at the next session cut).
+
+Notes on v1.1 behavior: after you delete `KILL.txt`, zones stay disarmed until you
+re-save each comment (deliberate). After news windows, cut-out lapses and Mondays,
+eligible zones re-arm automatically within ~5 seconds. If the bot was down over
+midnight Prague, it enters a safe mode (no new arming that day) because the FTMO
+day-anchor can't be trusted — the journal says so.
 
 ## First-week checklist (feeds Gate G2)
 
