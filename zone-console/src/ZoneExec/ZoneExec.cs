@@ -222,11 +222,12 @@ namespace cAlgo.Robots
             bool geomSame = top == z.Top && bottom == z.Bottom;
             if (!force && geomSame && comment == z.LastComment) return;
 
+            // NB: the ID-writeback echo is already caught by the LastComment guard above
+            // (WriteBackId syncs z.LastComment). Any comment change reaching here is a
+            // genuine edit and must re-validate + re-place — no adopt-without-revalidate
+            // shortcut (audit v1.1: that shortcut left stale orders on risk/dir/HOLD edits).
             List<string> errors;
             var rec = ZoneRecord.TryParse(comment, Server.Time, out errors);
-            bool sameIdentity = rec != null && z.Rec != null && rec.Id == z.Id && !string.IsNullOrEmpty(z.Id);
-            if (!force && geomSame && sameIdentity && comment != z.LastComment)
-            { z.LastComment = comment; z.Rec = rec; return; } // ID writeback echo — adopt, don't disarm
 
             bool changed = comment != z.LastComment || !geomSame;
             z.Top = top; z.Bottom = bottom; z.LastComment = comment;
@@ -253,6 +254,11 @@ namespace cAlgo.Robots
 
             if (rec.Weekend == WeekendPolicy.Hold)
             {
+                // cancel any resting order this zone may already carry before dropping Rec
+                // (audit v1.1 fix 7: a HOLD edit must not leak a live order)
+                if (!string.IsNullOrEmpty(rec.Id))
+                    foreach (var o in PendingOrders.Where(o => (o.Label ?? "") == LabelPrefix + rec.Id && o.SymbolName == SymbolName).ToList())
+                        o.Cancel();
                 z.Status = ZStatus.Rejected; z.Rec = null;
                 Journal("zone_rejected", z, ("errors", "WKD:HOLD not allowed on FTMO Normal"));
                 Paint(rect, z, "#808080");
@@ -270,7 +276,11 @@ namespace cAlgo.Robots
             if (_loadedTouches.TryGetValue(z.Id, out tLoad)) { z.TouchesUsed = tLoad; _loadedTouches.Remove(z.Id); }
             if (_loadedLastTouch.TryGetValue(z.Id, out ltLoad)) { z.LastTouchUtc = ltLoad; _loadedLastTouch.Remove(z.Id); }
 
-            if (z.Status == ZStatus.Killed) return; // sticky: comment was re-saved? changed==true clears via Draft below
+            if (z.Status == ZStatus.Killed)
+            {
+                if (!changed) return;
+                z.Status = ZStatus.Draft; // audit v1.1 fix 1: re-saving the comment re-engages a killed zone (documented behaviour)
+            }
             if (changed && z.Status != ZStatus.Draft && z.Status != ZStatus.Rejected &&
                 z.Status != ZStatus.Armed && z.Status != ZStatus.WaitingConfirm)
                 return; // Filled/Retired/Expired keep their status; edits there are cosmetic
@@ -299,6 +309,10 @@ namespace cAlgo.Robots
             if (now < _anchorLateBlockUntilUtc) { why = "late day-anchor safe mode"; return true; }
             if (_newsSuspended) { why = "news window"; return true; }
             if (InWeekendNoArmWindow(now)) { why = "weekend no-arm window"; return true; }
+            // After the daily flatten time (indices), stay out until the next UTC day so
+            // arm→flatten→arm can't churn through the nightly break (audit v1.1 fix 3).
+            if (_dailyCutEnabled && now.DayOfWeek != DayOfWeek.Saturday && now.DayOfWeek != DayOfWeek.Sunday
+                && now.TimeOfDay >= _dailyCut) { why = "past daily flatten (nightly break)"; return true; }
             why = ""; return false;
         }
 
@@ -328,6 +342,12 @@ namespace cAlgo.Robots
             if (Positions.Any(p => (p.Label ?? "") == LabelPrefix + z.Id && p.SymbolName == SymbolName))
             { if (z.Status != ZStatus.Filled) { z.Status = ZStatus.Filled; Journal("zone_adopted", z, ("note", "existing position found")); } return; }
 
+            // Touch budget already spent → retire, never re-place (audit v1.1 fix 4).
+            // FlattenEverything demotes to Draft, and touches persist across restarts, so
+            // without this a budget-exhausted zone would silently re-arm a fresh order.
+            if (z.TouchesUsed >= z.Rec.TouchBudget)
+            { z.Status = ZStatus.Retired; Journal("zone_retired", z, ("reason", "touch budget already spent")); return; }
+
             double atr = _dailyAtr.Result.LastValue;
             if (double.IsNaN(atr) || atr <= 0)
             { JournalRejectOnce(z, "blocked", "daily ATR unavailable/NaN - refusing to arm"); return; }
@@ -337,9 +357,12 @@ namespace cAlgo.Robots
             var others = _zones.Values.Where(o => o != z && o.Rec != null &&
                             (o.Status == ZStatus.Armed || o.Status == ZStatus.WaitingConfirm || o.Status == ZStatus.Filled))
                          .Select(o => new ZoneGeometry { Symbol = SymbolName, Top = o.Top, Bottom = o.Bottom, Direction = o.Rec.Direction });
+            // Validator errors keep Rec so the periodic pass can retry (audit v1.1 fix 6:
+            // transient errors like too-far / overlap-with-a-zone-that-later-retires must
+            // not dead-end until a manual re-save). Logging is throttled.
             var val = ZoneValidator.Validate(z.Rec, geo, atr, mid, Server.Time, others);
             if (!val.Ok)
-            { z.Status = ZStatus.Rejected; Journal("zone_rejected", z, ("errors", string.Join(" | ", val.Errors))); Paint(rect, z, "#808080"); return; }
+            { z.Status = ZStatus.Rejected; JournalRejectOnce(z, "validation", string.Join(" | ", val.Errors)); Paint(rect, z, "#808080"); return; }
 
             // Passive-side gate (audit fix: never a marketable limit, never in-zone,
             // never a post-stop instant re-entry). BUY zone: price must be fully
@@ -363,7 +386,7 @@ namespace cAlgo.Robots
 
             var sizing = ComputeVolumeLive(z.Rec, stopDist);
             if (!sizing.Ok)
-            { z.Status = ZStatus.Rejected; Journal("zone_rejected", z, ("errors", string.Join(" | ", sizing.Errors))); Paint(rect, z, "#808080"); return; }
+            { z.Status = ZStatus.Rejected; JournalRejectOnce(z, "sizing", string.Join(" | ", sizing.Errors)); Paint(rect, z, "#808080"); return; }
             foreach (var w in sizing.Warnings) Journal("zone_warning", z, ("warning", w));
 
             if (z.Rec.Entry == EntryStyle.T1RestingLimit)
@@ -510,7 +533,9 @@ namespace cAlgo.Robots
                 _lastRearmPassUtc = now;
                 string why;
                 if (!ArmingBlocked(out why))
-                    foreach (var z in _zones.Values.Where(x => x.Status == ZStatus.Draft && x.Rec != null).ToList())
+                    // Draft (came back from a block) and Rejected-with-Rec (transient
+                    // validation error, e.g. was too far, now in range) both retry here.
+                    foreach (var z in _zones.Values.Where(x => (x.Status == ZStatus.Draft || x.Status == ZStatus.Rejected) && x.Rec != null).ToList())
                     {
                         var rect = Chart.Objects.OfType<ChartRectangle>().FirstOrDefault(r => r.Name == z.RectName);
                         if (rect != null) TryArm(z, rect);
@@ -526,23 +551,30 @@ namespace cAlgo.Robots
         private void UpdateBreakers(DateTime nowUtc)
         {
             if (_tzBroken) return;
-            var prg = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, _prague).Date;
+            var pragueNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, _prague);
+            var prg = pragueNow.Date;
             if (prg != _dayStartDatePrague)
             {
-                bool late = _dayStartDatePrague != DateTime.MinValue && (prg - _dayStartDatePrague).TotalDays > 1.5;
                 bool firstEver = _dayStartDatePrague == DateTime.MinValue;
+                // Detected materially after Prague midnight ⇒ the rollover was processed
+                // late (bot was down over midnight). Continuous running detects it within
+                // ~1s, so a >10-min offset means the true day-start equity is unknown.
+                // (audit v1.1 fix 5: the old >1.5-day gap test missed one-midnight outages.)
+                bool detectedLate = !firstEver && pragueNow.TimeOfDay > TimeSpan.FromMinutes(10);
+                // On a genuine first install, only distrust the anchor if the account
+                // already shows an intraday loss we didn't witness.
+                bool firstEverSuspect = firstEver && Account.Equity < _initialBalance * 0.995;
+
                 _dayStartDatePrague = prg;
                 _dayStartRef = Math.Max(Account.Balance, Account.Equity);
                 MarkStateDirty();
                 Journal("day_anchor", null, ("ref", F(_dayStartRef)),
                         ("prague_date", prg.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)));
-                // Anchor set late (bot was down over midnight): the true FTMO anchor is
-                // unknown and may be higher — safe mode: no NEW arming for this Prague day.
-                if (late || (firstEver && nowUtc.TimeOfDay > TimeSpan.FromHours(1) &&
-                             TimeZoneInfo.ConvertTimeFromUtc(nowUtc, _prague).TimeOfDay > TimeSpan.FromHours(6)))
+                if (detectedLate || firstEverSuspect)
                 {
                     _anchorLateBlockUntilUtc = TimeZoneInfo.ConvertTimeToUtc(prg.AddDays(1), _prague);
-                    Journal("anchor_late", null, ("action", "no new arming until next Prague midnight; existing positions keep broker stops"));
+                    Journal("anchor_late", null, ("reason", detectedLate ? "rollover processed late (outage over midnight)" : "first install with an existing intraday loss"),
+                            ("action", "no new arming until next Prague midnight; open positions keep broker stops"));
                 }
             }
 
@@ -676,8 +708,11 @@ namespace cAlgo.Robots
             var cap = rec.ExpiryUtc < friday ? rec.ExpiryUtc : friday;
             if (_dailyCutEnabled)
             {
-                var todayCut = now.Date.Add(_dailyCut);
-                if (todayCut > now && todayCut < cap) cap = todayCut; // never survive the daily break either
+                // next daily flatten (today's if still ahead, else tomorrow's) — an order
+                // must never survive the nightly break (audit v1.1 fix 3).
+                var nextDailyCut = now.Date.Add(_dailyCut);
+                if (nextDailyCut <= now) nextDailyCut = nextDailyCut.AddDays(1);
+                if (nextDailyCut < cap) cap = nextDailyCut;
             }
             return cap;
         }
@@ -719,8 +754,12 @@ namespace cAlgo.Robots
 
         private void ReconcileBrokerState()
         {
+            // A zone counts as "known" only if it parses, has an id, AND is still
+            // arm-eligible; a WKD:HOLD edit is a rejection, so its leftover order must be
+            // treated as an orphan and cancelled here (audit v1.1 fix 7).
             var known = new HashSet<string>(Chart.Objects.OfType<ChartRectangle>()
-                        .Select(r => { List<string> e; var rec = ZoneRecord.TryParse(r.Comment ?? "", Server.Time, out e); return rec != null && !string.IsNullOrEmpty(rec.Id) ? LabelPrefix + rec.Id : null; })
+                        .Select(r => { List<string> e; var rec = ZoneRecord.TryParse(r.Comment ?? "", Server.Time, out e);
+                                       return rec != null && !string.IsNullOrEmpty(rec.Id) && rec.Weekend != WeekendPolicy.Hold ? LabelPrefix + rec.Id : null; })
                         .Where(x => x != null));
             foreach (var o in PendingOrders.Where(o => (o.Label ?? "").StartsWith(LabelPrefix) && o.SymbolName == SymbolName).ToList())
                 if (!known.Contains(o.Label))
