@@ -15,6 +15,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using File = System.IO.File; // cAlgo.API also defines a File type — pin the .NET one (CS0104)
 using System.Linq;
 using System.Net.Http;
 using System.Text;
