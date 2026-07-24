@@ -23,6 +23,13 @@ An **empty comment = draft**: the cBot silently ignores the rectangle (safe defa
 | `TCH:` | touch budget before the zone retires | `TCH:1..3` | `TCH:2` | `TCH:1` |
 | `E:` | entry price inside the zone | `E:MID` middle / `E:EDGE` near edge | `E:MID` | `E:EDGE` |
 | `WKD:` | weekend policy | `WKD:FLAT` close before weekend / `WKD:HOLD` keep (sized for gaps: stop assumed 2×) | `WKD:FLAT` | `WKD:FLAT` |
+
+> **FTMO Normal deployment (this project):** weekend holding is prohibited by the prop
+> firm, so `WKD:HOLD` is **rejected** at validation, all positions flatten before the
+> Friday session close, and a high-impact-news pause (±15 min, wider than FTMO's ±2 min
+> rule) is hard-coded. Breakers are computed FTMO-style (open + closed P/L, midnight
+> Prague reset): daily cut-out −3% (buffer before FTMO's −5% breach) and account
+> breaker −8% (before FTMO's −10%). Implemented in Session 2's ZoneExec cBot.
 | `ID:` | your own tag, no spaces (else assigned at first arm and written back — never derived from geometry, so resizing keeps identity) | `ID:NFPFADE` | auto | auto |
 
 Reward:risk targets are class defaults: **RED → TP at 2.5R**, **YEL → TP at 2.0R** (v1 fixed; configurable later).
