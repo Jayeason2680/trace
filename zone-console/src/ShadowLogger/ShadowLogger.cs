@@ -1,9 +1,15 @@
 // ============================================================================
-// ShadowLogger v1 — Zone Console, Session 1
+// ShadowLogger v1.1 — Zone Console, Session 1 (post-audit)
 // Watch-only cBot: logs rectangles ("zones") and price touches to a JSONL
 // journal, sends a nightly Telegram digest, pings a heartbeat URL.
 // CONTAINS NO ORDER CODE BY DESIGN — it cannot trade.
 // Attach one instance to every chart you draw zones on.
+//
+// v1.1 audit fixes: non-blocking HTTP (never stalls ticks), band-based touch
+// hysteresis (spread-spike safe), persisted digest date (no double-send after
+// restart), per-chart journal file (two same-symbol charts can't collide),
+// change-detected zone_modified (no drag floods), synthetic touch_end on
+// removal/zero-height.
 // ============================================================================
 using System;
 using System.Collections.Generic;
@@ -12,6 +18,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
+using System.Threading.Tasks;
 using cAlgo.API;
 using cAlgo.API.Internals;
 
@@ -43,6 +50,7 @@ namespace cAlgo.Robots
         private sealed class RectState
         {
             public string Comment = "";
+            public double Top, Bottom;      // last seen geometry, for change detection
             public bool Inside;
             public DateTime TouchStartUtc;
             public double TouchMin, TouchMax;
@@ -51,6 +59,7 @@ namespace cAlgo.Robots
 
         private readonly Dictionary<string, RectState> _rects = new Dictionary<string, RectState>();
         private string _journalPath;
+        private string _digestStatePath;
         private int _secondsToHeartbeat;
         private int _heartbeatFailures;
         private DateTime _lastDigestDateUtc = DateTime.MinValue;
@@ -62,7 +71,12 @@ namespace cAlgo.Robots
             var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
                                    "ZoneConsole", "journal");
             Directory.CreateDirectory(dir);
-            _journalPath = Path.Combine(dir, SymbolName + "-shadow.jsonl");
+            // Per-chart file: two instances on the same symbol (different timeframes)
+            // must never share a file (exclusive append handles would drop lines).
+            var baseName = SymbolName + "-" + Chart.TimeFrame + "-shadow";
+            _journalPath = Path.Combine(dir, baseName + ".jsonl");
+            _digestStatePath = Path.Combine(dir, baseName + ".digestdate");
+            _lastDigestDateUtc = ReadDigestDate();
 
             Chart.ObjectsAdded += OnObjectsAdded;
             Chart.ObjectsRemoved += OnObjectsRemoved;
@@ -76,8 +90,8 @@ namespace cAlgo.Robots
 
             Journal("logger_start", null, ("watching", _rects.Count.ToString(CultureInfo.InvariantCulture)));
             Telegram(string.Format(CultureInfo.InvariantCulture,
-                "🟢 ShadowLogger started on {0} — watching {1} rectangle(s)",
-                SymbolName, _rects.Count), silent: false);
+                "🟢 ShadowLogger started on {0} {1} — watching {2} rectangle(s)",
+                SymbolName, Chart.TimeFrame, _rects.Count), silent: false);
         }
 
         protected override void OnStop()
@@ -98,8 +112,15 @@ namespace cAlgo.Robots
         {
             foreach (var rect in e.ChartObjects.OfType<ChartRectangle>())
             {
-                if (_rects.Remove(rect.Name))
+                RectState st;
+                if (_rects.TryGetValue(rect.Name, out st))
+                {
+                    if (st.Inside) // never leave a dangling touch_start in the journal
+                        Journal("touch_end", rect, ("reason", "zone_removed"),
+                            ("range_min", F(st.TouchMin)), ("range_max", F(st.TouchMax)));
+                    _rects.Remove(rect.Name);
                     Journal("zone_removed", rect);
+                }
             }
         }
 
@@ -109,8 +130,15 @@ namespace cAlgo.Robots
             {
                 RectState st;
                 if (!_rects.TryGetValue(rect.Name, out st)) { TrackRect(rect, "zone_added"); continue; }
+
+                double top = Math.Max(rect.Y1, rect.Y2), bottom = Math.Min(rect.Y1, rect.Y2);
                 var newComment = rect.Comment ?? "";
-                if (newComment != st.Comment)
+                bool geomChanged = top != st.Top || bottom != st.Bottom;
+                bool commentChanged = newComment != st.Comment;
+                if (!geomChanged && !commentChanged) continue; // drag-noise: no journal spam
+
+                st.Top = top; st.Bottom = bottom;
+                if (commentChanged)
                 {
                     st.Comment = newComment;
                     Journal("zone_configured", rect, ("parse", DescribeComment(newComment)));
@@ -123,7 +151,12 @@ namespace cAlgo.Robots
         private void TrackRect(ChartRectangle rect, string evt)
         {
             if (_rects.ContainsKey(rect.Name)) return;
-            var st = new RectState { Comment = rect.Comment ?? "" };
+            var st = new RectState
+            {
+                Comment = rect.Comment ?? "",
+                Top = Math.Max(rect.Y1, rect.Y2),
+                Bottom = Math.Min(rect.Y1, rect.Y2)
+            };
             _rects[rect.Name] = st;
             Journal(evt, rect, ("parse", DescribeComment(st.Comment)));
         }
@@ -139,12 +172,24 @@ namespace cAlgo.Robots
                 double top = Math.Max(rect.Y1, rect.Y2);
                 double bottom = Math.Min(rect.Y1, rect.Y2);
                 double height = top - bottom;
-                if (height <= 0) continue;
+                if (height <= 0)
+                {
+                    if (st.Inside)
+                    {
+                        st.Inside = false;
+                        Journal("touch_end", rect, ("reason", "zone_collapsed"));
+                    }
+                    continue;
+                }
 
                 double mid = (Symbol.Bid + Symbol.Ask) / 2.0;
-                bool overlap = Symbol.Bid <= top && Symbol.Ask >= bottom;
+                double buffer = height * TouchHysteresis;
+                bool enter = Symbol.Bid <= top && Symbol.Ask >= bottom;
+                // Exit uses the SAME band plus the buffer, so exit ⇒ enter is false
+                // (audit fix: mid-based exit oscillated when spread > 2×buffer).
+                bool exit = Symbol.Bid > top + buffer || Symbol.Ask < bottom - buffer;
 
-                if (!st.Inside && overlap)
+                if (!st.Inside && enter)
                 {
                     st.Inside = true;
                     st.TouchStartUtc = Server.Time;
@@ -159,8 +204,7 @@ namespace cAlgo.Robots
                 {
                     st.TouchMin = Math.Min(st.TouchMin, mid);
                     st.TouchMax = Math.Max(st.TouchMax, mid);
-                    double buffer = height * TouchHysteresis;
-                    if (mid > top + buffer || mid < bottom - buffer)
+                    if (exit)
                     {
                         st.Inside = false;
                         Journal("touch_end", rect,
@@ -181,10 +225,13 @@ namespace cAlgo.Robots
                 Heartbeat();
             }
 
+            // >= so a restart that misses the exact hour still sends once, later that day;
+            // the persisted date prevents double-sends across restarts (audit fix).
             var nowUtc = Server.Time;
-            if (nowUtc.Hour == DigestHourUtc && _lastDigestDateUtc.Date != nowUtc.Date)
+            if (nowUtc.Hour >= DigestHourUtc && _lastDigestDateUtc.Date != nowUtc.Date)
             {
                 _lastDigestDateUtc = nowUtc;
+                WriteDigestDate(nowUtc);
                 SendDigest();
             }
         }
@@ -192,22 +239,29 @@ namespace cAlgo.Robots
         private void Heartbeat()
         {
             if (string.IsNullOrWhiteSpace(HeartbeatUrl)) return;
-            try
+            // Fire-and-forget: never block the tick thread (audit fix). Result is
+            // marshalled back to the main thread before touching state.
+            HttpShared.GetAsync(HeartbeatUrl).ContinueWith(t =>
             {
-                var resp = HttpShared.GetAsync(HeartbeatUrl).GetAwaiter().GetResult();
-                if (!resp.IsSuccessStatusCode) throw new Exception("HTTP " + (int)resp.StatusCode);
-                _heartbeatFailures = 0;
-            }
-            catch (Exception ex)
-            {
-                _heartbeatFailures++;
-                if (_heartbeatFailures == 5)
-                    Journal("heartbeat_failing", null, ("error", ex.Message));
-            }
+                bool ok = t.Status == TaskStatus.RanToCompletion && t.Result.IsSuccessStatusCode;
+                if (t.Status == TaskStatus.RanToCompletion) t.Result.Dispose();
+                BeginInvokeOnMainThread(() =>
+                {
+                    if (ok) { _heartbeatFailures = 0; return; }
+                    _heartbeatFailures++;
+                    if (_heartbeatFailures == 5)
+                        Journal("heartbeat_failing", null, ("failures", "5"));
+                });
+            }, TaskContinuationOptions.ExecuteSynchronously);
         }
 
         private void SendDigest()
         {
+            // prune states whose rectangles no longer exist (renames leave orphans)
+            var live = new HashSet<string>(Chart.Objects.OfType<ChartRectangle>().Select(o => o.Name));
+            foreach (var dead in _rects.Keys.Where(k => !live.Contains(k)).ToList())
+                _rects.Remove(dead);
+
             int configured = _rects.Values.Count(r => !string.IsNullOrWhiteSpace(r.Comment));
             var expiring = new List<string>();
             foreach (var rect in Chart.Objects.OfType<ChartRectangle>())
@@ -218,8 +272,8 @@ namespace cAlgo.Robots
             }
             var sb = new StringBuilder();
             sb.AppendFormat(CultureInfo.InvariantCulture,
-                "📒 {0} digest — zones watched: {1} ({2} configured) · touches today: {3}",
-                SymbolName, _rects.Count, configured, _touchesTodayTotal);
+                "📒 {0} {1} digest — zones watched: {2} ({3} configured) · touches today: {4}",
+                SymbolName, Chart.TimeFrame, _rects.Count, configured, _touchesTodayTotal);
             if (expiring.Count > 0)
                 sb.Append("\n⏳ expiring ≤7d: ").Append(string.Join(", ", expiring));
             Telegram(sb.ToString(), silent: true);
@@ -254,6 +308,29 @@ namespace cAlgo.Robots
             return null;
         }
 
+        private DateTime ReadDigestDate()
+        {
+            try
+            {
+                if (File.Exists(_digestStatePath))
+                {
+                    DateTime d;
+                    if (DateTime.TryParseExact(File.ReadAllText(_digestStatePath).Trim(), "yyyy-MM-dd",
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out d))
+                        return d;
+                }
+            }
+            catch (Exception ex) { Print("digest state read failed: {0}", ex.Message); }
+            return DateTime.MinValue;
+        }
+
+        private void WriteDigestDate(DateTime d)
+        {
+            try { File.WriteAllText(_digestStatePath, d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)); }
+            catch (Exception ex) { Print("digest state write failed: {0}", ex.Message); }
+        }
+
         private static string F(double v) => v.ToString("0.#####", CultureInfo.InvariantCulture);
 
         private static string J(string s)
@@ -276,7 +353,8 @@ namespace cAlgo.Robots
                 var sb = new StringBuilder(256);
                 sb.Append("{\"ts\":\"").Append(Server.Time.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture))
                   .Append("\",\"event\":\"").Append(J(evt))
-                  .Append("\",\"symbol\":\"").Append(J(SymbolName)).Append('"');
+                  .Append("\",\"symbol\":\"").Append(J(SymbolName))
+                  .Append("\",\"tf\":\"").Append(J(Chart.TimeFrame.ToString())).Append('"');
                 if (rect != null)
                 {
                     sb.Append(",\"zone\":\"").Append(J(rect.Name))
@@ -304,7 +382,12 @@ namespace cAlgo.Robots
                     new KeyValuePair<string, string>("text", text),
                     new KeyValuePair<string, string>("disable_notification", silent ? "true" : "false")
                 };
-                HttpShared.PostAsync(url, new FormUrlEncodedContent(payload)).GetAwaiter().GetResult();
+                // Fire-and-forget: never block the tick thread (audit fix).
+                HttpShared.PostAsync(url, new FormUrlEncodedContent(payload)).ContinueWith(t =>
+                {
+                    if (t.Status == TaskStatus.RanToCompletion) { t.Result.Dispose(); return; }
+                    BeginInvokeOnMainThread(() => Print("telegram send failed"));
+                }, TaskContinuationOptions.ExecuteSynchronously);
             }
             catch (Exception ex) { Print("telegram send failed: {0}", ex.Message); }
         }

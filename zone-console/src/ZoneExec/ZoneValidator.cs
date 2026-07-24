@@ -82,8 +82,12 @@ namespace ZoneConsole.Core
 
             foreach (var z in existing ?? Array.Empty<ZoneGeometry>())
             {
-                if (z.Direction != geo.Direction) continue;
-                bool overlap = geo.Bottom <= z.Top && geo.Top >= z.Bottom;
+                // audit fixes: filter by symbol here (callers may pass the whole book),
+                // compare against the authoritative record direction, and use strict
+                // inequalities so stacked zones sharing an edge are allowed.
+                if (!string.Equals(z.Symbol, geo.Symbol, StringComparison.OrdinalIgnoreCase)) continue;
+                if (z.Direction != rec.Direction) continue;
+                bool overlap = geo.Bottom < z.Top && geo.Top > z.Bottom;
                 if (overlap)
                     r.Errors.Add("overlaps existing same-direction zone [" +
                                  Fmt("{0:0.#####}–{1:0.#####}", z.Bottom, z.Top) + "]");

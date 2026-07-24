@@ -65,7 +65,8 @@ namespace ZoneConsole.Core
             if (lossPerUnit <= 0) { res.Errors.Add("loss-per-unit computed as zero"); return res; }
 
             double rawUnits = riskMoney / lossPerUnit;
-            double stepped = Math.Floor(rawUnits / volumeStep) * volumeStep; // audit fix: round DOWN
+            // round DOWN to the broker step; +1e-9 guards float noise (28.999999999996 → 29)
+            double stepped = Math.Floor(rawUnits / volumeStep + 1e-9) * volumeStep;
             if (stepped < volumeMin)
             {
                 res.Errors.Add(Fmt(
@@ -133,13 +134,17 @@ namespace ZoneConsole.Core
 
         /// <summary>
         /// Map a symbol to (factor, weight) legs. FX pairs → base +1, quote −1.
-        /// Metals/indices/energy → asset factor + quote currency + a shared RISK_ON group.
-        /// Unknown symbols map to their own name (still capped individually).
+        /// Metals → asset factor + quote currency. Indices/energy → asset factor
+        /// + a shared RISK_ON group. Partially recognized 6-letter symbols still
+        /// emit the recognized currency leg plus an own-name residual (audit fix:
+        /// EURNOK must count toward EUR). Fully unknown symbols map to their own
+        /// name (still capped individually).
         /// </summary>
         public static IEnumerable<(string factor, double weight)> FactorLegs(string symbol)
         {
             var s = (symbol ?? "").ToUpperInvariant().Replace("/", "").Replace("_", "");
-            string[] fx = { "USD", "EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF", "SGD", "MYR", "CNH" };
+            string[] fx = { "USD", "EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF", "SGD", "MYR", "CNH",
+                            "NOK", "SEK", "DKK", "ZAR", "MXN", "TRY", "HKD", "PLN", "HUF", "CZK" };
 
             if (s.StartsWith("XAU")) return Legs(("GOLD", 1), (Quote(s, "XAU"), -1));
             if (s.StartsWith("XAG")) return Legs(("SILVER", 1), (Quote(s, "XAG"), -1));
@@ -154,8 +159,10 @@ namespace ZoneConsole.Core
             if (s.Length >= 6)
             {
                 var b = s.Substring(0, 3); var q = s.Substring(3, 3);
-                if (Array.IndexOf(fx, b) >= 0 && Array.IndexOf(fx, q) >= 0)
-                    return Legs((b, 1), (q, -1));
+                bool bKnown = Array.IndexOf(fx, b) >= 0, qKnown = Array.IndexOf(fx, q) >= 0;
+                if (bKnown && qKnown) return Legs((b, 1), (q, -1));
+                if (bKnown) return Legs((b, 1), (s, 1));   // recognized base + residual
+                if (qKnown) return Legs((q, -1), (s, 1));  // recognized quote + residual
             }
             return Legs((s.Length == 0 ? "UNKNOWN" : s, 1));
         }
@@ -169,23 +176,46 @@ namespace ZoneConsole.Core
 
         // ------------------------------------------------------------ breakers
         /// <summary>
-        /// Daily cut-out: equity vs the day-start snapshot (broker day, UTC).
-        /// Trips at −3%: FREEZES new arms/orders; open positions keep their broker-side
-        /// stops — flattening is a human decision announced by a PAGE (audit: explicit,
-        /// signed semantics). Account breaker at −10% from high-water mark: everything
-        /// disarms and stays disarmed until a written review.
+        /// Latched breaker state (audit fix #5: a stateless comparison would un-trip on
+        /// an equity bounce, contradicting the promised semantics). Daily cut-out latches
+        /// until the next UTC day; the account breaker latches until ManualReset() —
+        /// which the runbook forbids doing from a phone.
         /// </summary>
-        public static (bool dailyTripped, bool accountTripped, string message) CheckBreakers(
-            double equityNow, double dayStartEquity, double highWaterEquity)
+        public sealed class BreakerState
         {
-            bool daily = dayStartEquity > 0 &&
-                         (dayStartEquity - equityNow) / dayStartEquity * 100.0 >= DailyCutoutPercent;
-            bool acct = highWaterEquity > 0 &&
-                        (highWaterEquity - equityNow) / highWaterEquity * 100.0 >= AccountBreakerPercent;
-            string msg = acct ? Fmt("ACCOUNT BREAKER: −{0:0.0}% from high-water — all zones disarm; written review required", AccountBreakerPercent)
-                      : daily ? Fmt("DAILY CUT-OUT: −{0:0.0}% today — no new risk until tomorrow; positions keep broker-side stops", DailyCutoutPercent)
-                      : "";
-            return (daily, acct, msg);
+            public DateTime DailyTrippedUntilUtc = DateTime.MinValue;
+            public bool AccountTripped;
+            public bool NewRiskBlocked(DateTime nowUtc) => AccountTripped || nowUtc < DailyTrippedUntilUtc;
+            public void ManualReset() { AccountTripped = false; DailyTrippedUntilUtc = DateTime.MinValue; }
+        }
+
+        /// <summary>
+        /// Evaluate breakers and latch. Returns a non-empty message only on a NEW trip
+        /// (callers page exactly once). Daily cut-out FREEZES new risk; open positions
+        /// keep their broker-side stops — flattening stays a human decision.
+        /// </summary>
+        public static string UpdateBreakers(BreakerState st, double equityNow,
+            double dayStartEquity, double highWaterEquity, DateTime nowUtc)
+        {
+            if (st == null) throw new ArgumentNullException(nameof(st));
+
+            if (!st.AccountTripped && highWaterEquity > 0 &&
+                (highWaterEquity - equityNow) / highWaterEquity * 100.0 >= AccountBreakerPercent)
+            {
+                st.AccountTripped = true;
+                return Fmt("ACCOUNT BREAKER: −{0:0.0}% from high-water — all zones disarm; written review required to reset",
+                           AccountBreakerPercent);
+            }
+
+            if (nowUtc >= st.DailyTrippedUntilUtc && dayStartEquity > 0 &&
+                (dayStartEquity - equityNow) / dayStartEquity * 100.0 >= DailyCutoutPercent)
+            {
+                st.DailyTrippedUntilUtc = DateTime.SpecifyKind(nowUtc.Date.AddDays(1), DateTimeKind.Utc);
+                return Fmt("DAILY CUT-OUT: −{0:0.0}% today — no new risk until tomorrow (UTC); positions keep broker-side stops",
+                           DailyCutoutPercent);
+            }
+
+            return "";
         }
 
         private static string Fmt(string f, params object[] a) =>

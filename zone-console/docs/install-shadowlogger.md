@@ -16,14 +16,14 @@ send your nightly Telegram digest, and ping the heartbeat.
 
 ## Install on the VPS (10 min)
 
-4. RDP into the VPS → open cTrader → **Automate** tab → New cBot → name it `ShadowLogger`.
+4. RDP into the VPS → open cTrader → **Algo** tab (called "Automate" on older versions)
+   → New cBot → name it `ShadowLogger`.
 5. Replace the template code with `src/ShadowLogger/ShadowLogger.cs` → **Build** (must be green).
-6. Add an **instance on every chart you draw zones on** (one per symbol chart, the same
-   chart window you actually draw on — drawings are per-chart):
-   chart → Automate panel → add `ShadowLogger`.
+6. Add an **instance on every chart you draw zones on** (the same chart window you
+   actually draw on — drawings are per-chart): chart → Algo panel → add `ShadowLogger`.
 7. Fill parameters: bot token, chat id, heartbeat URL. Leave the rest at defaults.
 8. **Start** the instance. Within a minute you should get:
-   `🟢 ShadowLogger started on EURUSD — watching N rectangles` and the healthchecks
+   `🟢 ShadowLogger started on EURUSD h1 — watching N rectangle(s)` and the healthchecks
    check should turn green.
 
 ## Daily use
@@ -32,12 +32,14 @@ send your nightly Telegram digest, and ping the heartbeat.
   rectangle Comment (double-click the rectangle → Comment) when you consider it a real zone;
   leave it empty while it's just a sketch — both are logged, configured zones are labelled.
 - 22:00 MYT: silent digest — zones watched, touches today, zones expiring soon.
-- Journal file on the VPS: `Documents\ZoneConsole\journal\<SYMBOL>-shadow.jsonl`
-  (one JSON line per event; nightly backup comes in Session 2 — for now it's included in
-  your normal weekly copy).
+  (Sent late rather than skipped if the platform restarts around that hour; never twice.)
+- Journal file on the VPS: `Documents\ZoneConsole\journal\<SYMBOL>-<TIMEFRAME>-shadow.jsonl`
+  (one JSON line per event, one file per chart; nightly backup comes in Session 2 — for
+  now it's included in your normal weekly copy).
 
 ## What "good" looks like after 7 days (Gate G1)
 
 - Touches in the journal match what your eyes saw on the chart.
 - Digest arrived every night; heartbeat stayed green except when you rebooted.
-- At least a handful of zones carry grammar comments with zero parse warnings.
+- At least a handful of zones carry grammar comments, and none of them show
+  `parse: "unparsed"` in the journal.

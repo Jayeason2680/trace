@@ -7,8 +7,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Security.Cryptography;
-using System.Text;
 
 namespace ZoneConsole.Core
 {
@@ -84,11 +82,24 @@ namespace ZoneConsole.Core
                 var t = tokens[i];
                 double d; int n; DateTime dt;
 
-                if (t.Length > 1 && t[0] == 'R' && double.TryParse(t.Substring(1),
-                    NumberStyles.Float, CultureInfo.InvariantCulture, out d))
+                // Risk token: anything that LOOKS like a risk token must parse strictly,
+                // or the zone rejects — never defaults, never clamps (audit fixes #2/#3).
+                if (t[0] == 'R' && LooksNumeric(t, 1))
                 {
-                    if (d <= 0) errors.Add("risk must be positive: " + t);
-                    else rec.RiskPercent = d;
+                    if (t.Length > 1 && double.TryParse(t.Substring(1),
+                        NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out d))
+                    {
+                        var cap = ClassRiskCap(rec.Class);
+                        if (d < 0.1)
+                            errors.Add("risk below the 0.1% floor: " + t);
+                        else if (d > cap)
+                            errors.Add(string.Format(CultureInfo.InvariantCulture,
+                                "risk {0}% above the {1} cap {2}% — rejected, not clamped", d, rec.Class, cap));
+                        else
+                            rec.RiskPercent = d;
+                    }
+                    else
+                        errors.Add("bad risk token (write e.g. R0.8, decimal point, no % sign): " + t);
                 }
                 else if (t.StartsWith("EXP:", StringComparison.Ordinal))
                 {
@@ -116,29 +127,32 @@ namespace ZoneConsole.Core
                     rec.Warnings.Add("ignored unknown token: " + t); // audit fix: never reject
             }
 
-            // hard rule: risk never above the class cap (validator re-checks; parser clamps loudly)
-            var cap = ClassRiskCap(rec.Class);
-            if (rec.RiskPercent > cap)
-            {
-                rec.Warnings.Add(string.Format(CultureInfo.InvariantCulture,
-                    "risk {0}% above {1} cap {2}% — clamped", rec.RiskPercent, rec.Class, cap));
-                rec.RiskPercent = cap;
-            }
-
             return errors.Count > 0 ? null : rec;
         }
 
-        /// <summary>Stable id: user tag if given, else SHA1(symbol|top|bottom|expiry) prefix.</summary>
-        public string StableId(string symbol, double top, double bottom)
+        /// <summary>
+        /// Zone identity (audit fix #1): NEVER derived from geometry — a resize must not
+        /// change the id, and opposite-direction zones must not share one. The executing
+        /// cBot calls NewId() once at first arm and writes it back into the comment as
+        /// "ID:xxxx", so the rectangle itself carries its identity from then on.
+        /// </summary>
+        public static string NewId()
         {
-            if (!string.IsNullOrEmpty(Id)) return Id;
-            var raw = string.Format(CultureInfo.InvariantCulture, "{0}|{1:0.#####}|{2:0.#####}|{3:yyyyMMdd}",
-                                    symbol, top, bottom, ExpiryUtc);
-            using (var sha = SHA1.Create())
+            var g = Guid.NewGuid().ToByteArray();
+            return BitConverter.ToString(g, 0, 4).Replace("-", ""); // 8 hex chars
+        }
+
+        /// <summary>True when the rest of the token is empty or made only of digits/./,
+        /// — i.e. the user clearly meant a risk number.</summary>
+        private static bool LooksNumeric(string t, int from)
+        {
+            if (t.Length <= from) return true; // bare "R"
+            for (int i = from; i < t.Length; i++)
             {
-                var h = sha.ComputeHash(Encoding.UTF8.GetBytes(raw));
-                return BitConverter.ToString(h, 0, 4).Replace("-", ""); // 8 hex chars
+                var c = t[i];
+                if ((c < '0' || c > '9') && c != '.' && c != ',') return false;
             }
+            return true;
         }
 
         private static DateTime EndOfUtcDay(DateTime utcDate) =>
