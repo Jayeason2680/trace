@@ -21,24 +21,31 @@ function Write-Log($msg) {
     Add-Content -Path $LogFile -Value ("{0}  {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg)
 }
 
+$Stage = Join-Path $env:TEMP ("zc-backup-" + (Get-Date -Format "yyyyMMddHHmmss"))
 try {
     $stamp   = Get-Date -Format "yyyyMMdd-HHmm"
     $zipPath = Join-Path $BackupDir "ZoneConsole-$stamp.zip"
 
-    # Back up the journal folder (events + .state + .digestdate) and news.txt.
-    # Deliberately exclude KILL.txt and the backups folder itself.
-    $toBackup = @()
+    # Copy sources to a staging dir FIRST via robocopy, then zip the copy
+    # (review fix #4). robocopy reads files even while ZoneExec is appending, so
+    # a 03:00 run can't fail or tear on an open journal handle. Compress-Archive
+    # on a still-open file could otherwise throw and skip the night's backup.
+    New-Item -ItemType Directory -Force -Path $Stage | Out-Null
     $journal = Join-Path $Root "journal"
-    if (Test-Path $journal)               { $toBackup += $journal }
+    if (Test-Path $journal) {
+        # /R:2 /W:1 = 2 retries, 1s apart; robocopy exit codes 0-7 are success.
+        robocopy $journal (Join-Path $Stage "journal") /E /R:2 /W:1 /NP /NFL /NDL /NJH /NJS | Out-Null
+        if ($LASTEXITCODE -ge 8) { Write-Log "WARNING: robocopy journal returned $LASTEXITCODE" }
+    }
     $news = Join-Path $Root "news.txt"
-    if (Test-Path $news)                  { $toBackup += $news }
+    if (Test-Path $news) { Copy-Item $news -Destination $Stage -Force -ErrorAction SilentlyContinue }
 
-    if ($toBackup.Count -eq 0) {
+    if (-not (Get-ChildItem -Path $Stage -Recurse -File -ErrorAction SilentlyContinue)) {
         Write-Log "nothing to back up yet (no journal/news) - skipping"
         exit 0
     }
 
-    Compress-Archive -Path $toBackup -DestinationPath $zipPath -Force
+    Compress-Archive -Path (Join-Path $Stage "*") -DestinationPath $zipPath -Force
     $sizeKb = [math]::Round((Get-Item $zipPath).Length / 1KB, 1)
     Write-Log "backup ok -> $zipPath ($sizeKb KB)"
 
@@ -53,4 +60,7 @@ try {
 catch {
     Write-Log ("EXCEPTION: " + $_.Exception.Message)
     exit 1
+}
+finally {
+    if (Test-Path $Stage) { Remove-Item $Stage -Recurse -Force -ErrorAction SilentlyContinue }
 }
