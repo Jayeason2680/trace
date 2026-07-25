@@ -1,0 +1,2 @@
+date_drawn,zone_id,symbol,class,direction,zone_top,zone_bottom,expiry,conviction_1to5,thesis,status,first_touch_date,touches_used,sim_entry,sim_stop,sim_target,outcome,realized_R_net,max_favorable_R,max_adverse_R,spread_at_touch_pips,notes
+2026-07-24,R-EXAMPLE,EURUSD,RED,SELL,1.10050,1.09800,2026-08-30,4,"weekly supply + prior rejection",EXPIRED,,0,,,,no_touch,,,,,"example row - delete me"
