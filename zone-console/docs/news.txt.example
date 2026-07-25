@@ -1,0 +1,22 @@
+# news.txt — high-impact events to pause around (±15 min by default)
+#
+# HOW TO USE
+#   1. Copy this file to  Documents\ZoneConsole\news.txt  on the VPS.
+#   2. One event per line, in UTC:   yyyy-MM-dd HH:mm
+#   3. Lines starting with # are ignored (use them as labels).
+#   4. Refresh every Sunday from the FTMO / ForexFactory calendar.
+#      ALWAYS verify exact dates & times against the calendar — release
+#      times shift with US daylight saving, and which events count as
+#      "restricted" can change.
+#
+# TIME TIP: US 08:30 ET = 12:30 UTC in summer (EDT), 13:30 UTC in winter (EST).
+#           US 14:00 ET (FOMC) = 18:00 UTC summer, 19:00 UTC winter.
+#
+# --- EXAMPLES (verify before trusting!) ---
+# NFP is the first Friday of each month, 08:30 ET:
+2026-08-07 12:30
+# Add FOMC / CPI / ECB / BoE dates for the weeks you're trading, e.g.:
+# 2026-08-13 12:30   # US CPI (verify)
+# 2026-09-04 12:30   # NFP September (verify)
+#
+# Delete the examples above and keep only real, verified upcoming events.
