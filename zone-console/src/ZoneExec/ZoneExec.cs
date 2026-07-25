@@ -234,7 +234,9 @@ namespace cAlgo.Robots
 
             if ((z.Status == ZStatus.Armed || z.Status == ZStatus.WaitingConfirm) && changed)
             {
-                CancelZoneOrders(z, "zone_edited");
+                bool cancelled = CancelZoneOrders(z, "zone_edited");
+                if (!cancelled) // audit v1.1 LOW #4: broker refused — don't silently re-place around a stale order
+                    Journal("MANUAL_INTERVENTION", z, ("issue", "stale order could not be cancelled after edit - cancel it in cTrader"));
                 z.Status = ZStatus.Draft;
             }
 
@@ -347,6 +349,12 @@ namespace cAlgo.Robots
             // without this a budget-exhausted zone would silently re-arm a fresh order.
             if (z.TouchesUsed >= z.Rec.TouchBudget)
             { z.Status = ZStatus.Retired; Journal("zone_retired", z, ("reason", "touch budget already spent")); return; }
+
+            // Don't place into a closed market (audit v1.1 LOW #1: e.g. GER40's overnight
+            // gap between the daily-block lift at 00:00 UTC and the ~07:00 session open).
+            // Existing orders/positions were already adopted above; this only defers NEW placement.
+            if (Symbol.MarketHours != null && !Symbol.MarketHours.IsOpened())
+            { JournalRejectOnce(z, "market_closed", "waiting for session open"); return; }
 
             double atr = _dailyAtr.Result.LastValue;
             if (double.IsNaN(atr) || atr <= 0)
@@ -717,15 +725,18 @@ namespace cAlgo.Robots
             return cap;
         }
 
-        private void CancelZoneOrders(Zone z, string reason)
+        private bool CancelZoneOrders(Zone z, string reason)
         {
-            if (string.IsNullOrEmpty(z.Id)) return;
+            if (string.IsNullOrEmpty(z.Id)) return true;
+            bool allOk = true;
             foreach (var o in PendingOrders.Where(o => (o.Label ?? "") == LabelPrefix + z.Id && o.SymbolName == SymbolName).ToList())
             {
-                var r = o.Cancel();
-                if (!r.IsSuccessful) { r = o.Cancel(); }
+                TradeResult r = null;
+                for (int attempt = 0; attempt < 3 && (r == null || !r.IsSuccessful); attempt++) r = o.Cancel();
+                if (!r.IsSuccessful) allOk = false;
                 Journal(r.IsSuccessful ? "order_cancelled" : "cancel_failed", z, ("reason", reason));
             }
+            return allOk;
         }
 
         private void CancelAllZcOrders(string reason)

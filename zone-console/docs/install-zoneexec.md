@@ -67,6 +67,12 @@ eligible zones re-arm automatically within ~5 seconds. If the bot was down over
 midnight Prague, it enters a safe mode (no new arming that day) because the FTMO
 day-anchor can't be trusted — the journal says so.
 
+Two expected quiet periods (not hangs): (1) on an index like GER40, a zone that
+becomes eligible after the daily flatten time waits for the next session to open before
+arming — that's the >2h-break rule, not a fault; (2) the bot never places an order into
+a closed market, so overnight you'll see `market_closed` / `past daily flatten` in the
+journal rather than new orders. Both resume automatically at session open.
+
 ## First-week checklist (feeds Gate G2)
 
 - [ ] Draw one small T1 zone near price on demo → see `zone_armed` + the resting order
