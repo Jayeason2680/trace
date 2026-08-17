@@ -61,12 +61,38 @@
 //        ORANGE  75% of it    $2,250  DAX 1,238  NAS 1,013/675    $3,750  DAX 2,063  NAS 1,688/1,125
 //        RED     90% of it    $2,700  DAX 1,485  NAS 1,215/810    $4,500  DAX 2,475  NAS 2,025/1,350
 //
-//      DAX A1 takes 55% of the budget. The NAS C1 DAY budget takes 60%, which the inherited aligned
-//      and misaligned multipliers (75% / 50%) resolve to exactly the 45% / 30% of daily budget shown
-//      above - so the frontier and the existing NAS sizing compose rather than fight. NAS C2 draws
-//      only the residual NAS budget. GOLD D1 is allocated INDEPENDENTLY at 0.25% of the locked
-//      initial balance, because a non-correlated multi-day swing is not part of the same-day
-//      DAX+NAS stopout constraint the daily budget is derived from.
+//      That budget is then divided by an ALLOCATION PROFILE. Two ship:
+//
+//      CORE2 reproduces the institutional report exactly: DAX A1 55% of the budget, and the NAS C1
+//      DAY budget 60% - which the inherited aligned and misaligned multipliers (75% / 50%) resolve
+//      to exactly the 45% / 30% of daily budget shown above, so the frontier and the existing NAS
+//      sizing compose rather than fight. Two engines, 100% of the budget at peak concurrency.
+//
+//      FULLARSENAL (the shipped default) spreads the SAME budget across all seven lanes. The shares
+//      are set against the lanes' real concurrency windows rather than by naive division, because
+//      the lanes are largely time-disjoint. All times London:
+//
+//        WINDOW            CONCURRENT LANES                              % OF DAILY BUDGET
+//        08:15-09:15       A2 25 + A3 15                                 40%
+//        09:15-09:30       A3 15 + B1 20                                 35%
+//        09:30-11:30       A1 40 + A3 15 + B1 20                         75%
+//        11:30-14:45       A1 40 + A3 15                                 55%
+//        14:45-16:25       A1 40 + A3 15 + C1 37.5 (aligned)             92.5%   <-- peak
+//        16:25-20:30       C1 37.5 (+ C2 12 only if C1 already stopped)  37.5%
+//
+//      Peak same-day worst case is therefore 92.5% of the budget - BELOW the 100% that CORE2 itself
+//      assumes - so running seven lanes does not raise same-day heat above the two-engine baseline.
+//      A2 is hard-flat at 09:15 before A1 signals, and B1 is flat at 11:30 London (06:30 ET) before
+//      C1 opens at 09:45 ET, which is what makes the arithmetic work.
+//
+//      NAS C2 draws only the residual NAS budget, and only after a C1 stop-out has already released
+//      C1's exposure. GOLD D1 is allocated INDEPENDENTLY at 0.25% of the locked initial balance,
+//      because a non-correlated multi-day swing is not part of the same-day stopout constraint the
+//      daily budget is derived from.
+//
+//      A lane that is ENABLED but carries no share under the active profile (for example A2 under
+//      CORE2) falls back to its static parameter value and is reported as UNFUNDED at startup -
+//      it still trades, but it can overspend the budget, so the warning is loud and journalled.
 //
 //      GREEN is the shipped default: it is the only tier the source report assigns a 0.00%
 //      floor-breach probability. ORANGE and RED are one parameter change away and each needs its
@@ -81,16 +107,22 @@
 //   RED the buffered official floor is normally the stricter of the two and the gate clips to it -
 //   that is the intended fail-closed ordering, not a misconfiguration.
 //
-// DEPLOYMENT PER THE SETUP SCORE HIERARCHY
-//   DEPLOY (CORE)  DAX A1 94/100 and NAS C1 91/100 - the two frontier-allocated engines.
-//   ADD (SWING)    GOLD D1 86/100 - independent 0.25% allocation, outside the daily budget.
-//   EXPERIMENT     NAS C2 82/100 trap fade - residual NAS budget only.
-//   DROP / PRUNE   UK B1 35/100, plus DAX B and DAX C, which carry no frontier allocation.
+// DEPLOYMENT
+//   All seven lanes ship ENABLED under the FULLARSENAL allocation profile.
 //
-//   The re-engineered DAX B, DAX C and UK B1 mechanics below are fully implemented and ship
-//   DISABLED. That prune verdict was measured on their ORIGINAL mechanics, so they are unproven
-//   rather than disproven: backtest each on its own before enabling it, and allocate it budget if
-//   you do - enabling one as-is spends capacity the frontier has not reserved.
+//   Two source documents disagree about three of them. The institutional report's setup-score
+//   hierarchy scores UK B1 35/100 with a DROP/PRUNE directive and prunes DAX B and DAX C; the
+//   muted-setup blueprint re-engineers all three and projects a positive 24-month expectancy for
+//   each. The disagreement is NOT a contradiction: the report scored the ORIGINAL mechanics
+//   (UK B1 as the Coil30 limit-at-mid, DAX B as the unbounded 08:15 range), while the blueprint
+//   scored the re-engineered replacements implemented in this file. The prune verdict therefore
+//   does not transfer to the current code, and these lanes are unproven rather than disproven.
+//
+//   Selecting CORE2 restores the report's pruned two-engine deployment without deleting anything:
+//   the unallocated lanes then report as UNFUNDED at startup and should be disabled by hand.
+//
+//   Neither document's performance figures are reproduced or asserted anywhere in this source.
+//   Native cTrader compilation, backtests and a demo soak remain mandatory for every lane.
 //
 // DELIBERATELY FROZEN IN V34.ARSENAL — these are NOT release identity and must never track a version:
 //   - The "V310" durable hard-halt latch payload/parser marker.
@@ -347,6 +379,16 @@ namespace cAlgo.Robots
             Red
         }
 
+        // V34.ARSENAL FRONTIER: how the daily risk budget is divided across the lanes.
+        // Core2 reproduces the institutional report (DAX A1 + NAS C1 only). FullArsenal
+        // spreads the SAME budget across all seven, using the lanes' time-disjoint windows
+        // so peak same-day worst case does not rise above the two-engine baseline.
+        public enum FrontierAllocationProfile
+        {
+            Core2,
+            FullArsenal
+        }
+
         private enum EntryStyle
         {
             MarketWithPips,
@@ -433,28 +475,25 @@ namespace cAlgo.Robots
         [Parameter("DAX A RefBreak", DefaultValue = true, Group = "3. Modules")]
         public bool DaxAEnabled { get; set; }
 
-        // V34.ARSENAL: A2 is re-engineered into the Frankfurt 08:00 cash-open velocity burst, but
-        // it ships DISABLED. The frontier budget allocates 55% to A1 and 60% to the NAS C1 day
-        // budget and nothing to A2, so enabling A2 would spend budget the frontier has not
-        // reserved. The V33.SPARK 5-year tick audit also lists DAX B inside its pruned drag. The
-        // re-engineered mechanics are fully implemented and one switch away once independently
-        // backtested; do that before turning this on.
-        [Parameter("DAX B Frankfurt open burst (A2)", DefaultValue = false, Group = "3. Modules")]
+        // V34.ARSENAL: A2 is the Frankfurt 08:00 cash-open velocity burst. Under the FullArsenal
+        // allocation profile it holds a reserved 25% share of the daily budget and is hard-flat
+        // at 09:15 London, before A1 signals, so it adds no peak concurrency. Under Core2 it is
+        // unfunded and will be reported as such at startup.
+        [Parameter("DAX B Frankfurt open burst (A2)", DefaultValue = true, Group = "3. Modules")]
         public bool DaxBEnabled { get; set; }
 
-        // V34.ARSENAL: A3 is re-engineered into the pre-London squeeze breakout (entries stop at
-        // 09:15 London) but ships DISABLED for the same reason as A2 — it carries no frontier
-        // budget allocation, and the audit prunes it by default.
-        [Parameter("DAX C Pre-London squeeze (A3, Challenge only)", DefaultValue = false, Group = "3. Modules")]
+        // V34.ARSENAL: A3 is the pre-London squeeze breakout (entries stop at 09:15 London). It
+        // holds a reserved 15% share under FullArsenal and is unfunded under Core2.
+        [Parameter("DAX C Pre-London squeeze (A3, Challenge only)", DefaultValue = true, Group = "3. Modules")]
         public bool DaxCEnabled { get; set; }
 
         // V34.ARSENAL replaces the Coil30 limit-at-mid mechanics with the 08:00 London cash-open
-        // momentum sweep, but ships it DISABLED. The V33.SPARK setup-score hierarchy scores UK B1
-        // 35/100 with an explicit DROP/PRUNE directive and attributes -$22k of 5-year drag to it,
-        // and the frontier allocates it no budget. NOTE: that verdict was measured on the Coil30
-        // mechanics, NOT on the re-engineered sweep implemented below — so this is "unproven",
-        // not "disproven". Backtest the sweep on its own before enabling it.
-        [Parameter("UK B1 London open sweep", DefaultValue = false, Group = "3. Modules")]
+        // momentum sweep. It holds a reserved 20% share under FullArsenal and is flat at 11:30
+        // London — 06:30 ET, before NAS C1 opens — so it never overlaps the NAS lane.
+        // NOTE: the institutional report's 35/100 DROP verdict was measured on the Coil30
+        // mechanics, NOT on this sweep, so the sweep is unproven rather than disproven. Backtest
+        // it natively before it carries real capital, exactly as for every other lane here.
+        [Parameter("UK B1 London open sweep", DefaultValue = true, Group = "3. Modules")]
         public bool UkAEnabled { get; set; }
 
         [Parameter("UK B RefBreakX test (forced OFF)", DefaultValue = false, Group = "3. Modules")]
@@ -532,6 +571,12 @@ namespace cAlgo.Robots
         // The gold lane is allocated INDEPENDENTLY of the daily budget, as a flat percentage of
         // the locked initial balance, because it is a non-correlated multi-day swing rather than
         // part of the same-day DAX+NAS stopout constraint the daily budget is derived from.
+        // FullArsenal funds all seven lanes from the same budget and is the shipped default.
+        // Core2 funds only DAX A1 and NAS C1; any other enabled lane is then reported as
+        // UNFUNDED at startup and sizes from its static parameter value instead.
+        [Parameter("Frontier allocation profile", DefaultValue = FrontierAllocationProfile.FullArsenal, Group = "4F. Frontier Risk")]
+        public FrontierAllocationProfile FrontierAllocation { get; set; }
+
         [Parameter("Frontier GOLD swing allocation %", DefaultValue = 0.25, MinValue = 0.0, MaxValue = 2.0, Step = 0.05, Group = "4F. Frontier Risk")]
         public double GoldSwingAllocationPct { get; set; }
 
@@ -946,16 +991,27 @@ namespace cAlgo.Robots
         private const double FrontierRedFraction = 0.90;
         private const double FrontierOrangeFraction = 0.75;
         private const double FrontierGreenFraction = 0.50;
-        // DAX A1 takes 55% of the budget outright.
-        private const double FrontierDaxShare = 0.55;
-        // The NAS C1 DAY BUDGET is 60% of the frontier budget. The inherited aligned/misaligned
-        // multipliers (NasAlignedPct 75% / NasMisalignedPct 50%) then resolve it to exactly the
-        // 45% / 30% of daily budget the frontier specifies, so the two mechanisms compose rather
-        // than overriding one another.
-        private const double FrontierNasBudgetShare = 0.60;
-        // The C2 trap fade is an EXPERIMENT tier: it draws only the residual NAS budget left
-        // after an aligned C1, and the Math.Min against the remaining day budget still binds it.
-        private const double FrontierNasReentryShare = 0.15;
+        //
+        // CORE2 profile — the institutional report's two-engine split. DAX A1 takes 55% outright;
+        // the NAS C1 DAY BUDGET takes 60%, which the inherited aligned/misaligned multipliers
+        // (NasAlignedPct 75% / NasMisalignedPct 50%) resolve to exactly the 45% / 30% of daily
+        // budget the report specifies, so the two mechanisms compose rather than override.
+        private const double FrontierCoreDaxAShare = 0.55;
+        private const double FrontierCoreNasBudgetShare = 0.60;
+        private const double FrontierCoreNasReentryShare = 0.15;
+        //
+        // FULLARSENAL profile — the SAME budget spread across all seven lanes. Shares are set
+        // against real concurrency windows, not by naive division, because the lanes are largely
+        // time-disjoint (A2 is hard-flat at 09:15 before A1 signals; B1 is flat at 11:30 London,
+        // which is 06:30 ET, before C1 opens at 09:45 ET). Peak concurrency is the 14:45-16:25
+        // London window: A1 40% + A3 15% + C1 aligned 37.5% = 92.5% of the budget, BELOW the 100%
+        // that CORE2 itself assumes. See the header table for every window.
+        private const double FrontierFullDaxAShare = 0.40;
+        private const double FrontierFullDaxBShare = 0.25;
+        private const double FrontierFullDaxCShare = 0.15;
+        private const double FrontierFullUkShare = 0.20;
+        private const double FrontierFullNasBudgetShare = 0.50;   // aligned 37.5% / misaligned 25%
+        private const double FrontierFullNasReentryShare = 0.12;
         //
         // GOLD D1 — XAUUSD H1 break-of-structure.
         private const int GoldMinimumBars = 60;
@@ -1573,12 +1629,7 @@ namespace cAlgo.Robots
                 ConfigurationFingerprint(), ProfileCode);
             Print("GATE | daily worst-case ${0:F0} | max-loss safety ${1:F0} | reserve {2:F0}% | max-loss type EOD trailing",
                 EffectiveDailyWorstCaseCapUsd(), MaxLossSafetyBufferUsd, ExecutionReservePct);
-            Print("FRONTIER | mode {0} | daily budget ${1:F0} = {2:F0}% of the {3:F1}% daily limit | DAX A1 ${4:F0} | NAS C1 ${5:F0} aligned / ${6:F0} misaligned | GOLD ${7:F0} independent",
-                FrontierModeText(), FrontierDailyRiskBudgetUsd(), FrontierModeFraction() * 100.0,
-                FtmoDailyLossPct, FrontierDailyRiskBudgetUsd() * FrontierDaxShare,
-                FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare * NasAlignedPct / 100.0,
-                FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare * NasMisalignedPct / 100.0,
-                FrontierActive() ? InitialBalance * GoldSwingAllocationPct / 100.0 : GoldRiskUsd);
+            ReportFrontierAllocation();
 
             Journal("BOT_START",
                 "\"run\":\"" + _runId + "\",\"stage\":\"" + Stage + "\",\"host\":\"" + Js(SymbolName) + "\",\"host_tf\":\"" + Bars.TimeFrame +
@@ -1596,12 +1647,17 @@ namespace cAlgo.Robots
                 ",\"dynamic_scale\":" + Jn(_currentDynamicRiskScale) +
                 ",\"dynamic_day_progress_pct\":" + Jn(_dynamicDayProgressPct) +
                 ",\"frontier_mode\":\"" + FrontierModeText() + "\"" +
+                ",\"frontier_profile\":\"" + FrontierAllocation + "\"" +
                 ",\"frontier_daily_budget\":" + Jn(FrontierDailyRiskBudgetUsd()) +
-                ",\"frontier_dax_a1\":" + Jn(FrontierDailyRiskBudgetUsd() * FrontierDaxShare) +
+                ",\"frontier_dax_a1\":" + Jn(FrontierDailyRiskBudgetUsd() * FrontierDaxAShare()) +
+                ",\"frontier_dax_a2\":" + Jn(FrontierDailyRiskBudgetUsd() * FrontierDaxBShare()) +
+                ",\"frontier_dax_a3\":" + Jn(FrontierDailyRiskBudgetUsd() * FrontierDaxCShare()) +
+                ",\"frontier_uk_b1\":" + Jn(FrontierDailyRiskBudgetUsd() * FrontierUkShare()) +
                 ",\"frontier_nas_aligned\":" +
-                    Jn(FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare * NasAlignedPct / 100.0) +
+                    Jn(FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare() * NasAlignedPct / 100.0) +
                 ",\"frontier_nas_misaligned\":" +
-                    Jn(FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare * NasMisalignedPct / 100.0) +
+                    Jn(FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare() * NasMisalignedPct / 100.0) +
+                ",\"frontier_nas_c2\":" + Jn(FrontierDailyRiskBudgetUsd() * FrontierNasReentryShare()) +
                 ",\"frontier_gold\":" + Jn(FrontierActive()
                     ? InitialBalance * GoldSwingAllocationPct / 100.0 : GoldRiskUsd) +
                 ",\"internal_daily_cap\":" + Jn(EffectiveDailyWorstCaseCapUsd()) +
@@ -6197,8 +6253,8 @@ namespace cAlgo.Robots
                 Label = window.Label,
                 Symbol = _daxSymbol,
                 Side = up ? TradeType.Buy : TradeType.Sell,
-                // Under the frontier, A1 is budget-allocated rather than table-allocated.
-                RequestedRisk = window.Label == DaxALabel ? EffectiveDaxARiskRequest() : window.RiskUsd,
+                // Under the frontier each DAX window draws its own allocated budget share.
+                RequestedRisk = EffectiveDaxWindowRisk(window),
                 SlDistancePts = window.SlPts,
                 TpDistancePts = window.TpPts,
                 Style = EntryStyle.MarketWithPips,
@@ -6245,7 +6301,7 @@ namespace cAlgo.Robots
                 Label = DaxCLabel,
                 Symbol = _daxSymbol,
                 Side = up ? TradeType.Buy : TradeType.Sell,
-                RequestedRisk = DaxCRiskUsd,
+                RequestedRisk = EffectiveDaxCRiskRequest(),
                 SlDistancePts = sl,
                 TpDistancePts = sl * DaxCTpMultiple,
                 Style = EntryStyle.MarketWithPips,
@@ -6602,7 +6658,7 @@ namespace cAlgo.Robots
                 Label = UkALabel,
                 Symbol = _ukSymbol,
                 Side = side.Value,
-                RequestedRisk = UkARiskUsd,
+                RequestedRisk = EffectiveUkRiskRequest(),
                 SlDistancePts = UkSweepSlPts,
                 TpDistancePts = UkSweepTpPts,
                 Style = UkLimitEntry ? EntryStyle.LimitAtMid : EntryStyle.MarketWithPips,
@@ -9117,13 +9173,16 @@ namespace cAlgo.Robots
                 "   DAY " + _dynamicDayProgressPct.ToString("+0.00;-0.00;0.00") + "%\n" +
                 "FLOOR   $" + effectiveFloor.ToString("N0").PadLeft(8) +
                 "   BUFFER   $" + floorBuffer.ToString("N0").PadLeft(8) + "\n" +
-                "FRONTIER " + FrontierModeText().PadRight(6) +
+                "FRONTIER " + FrontierModeText().PadRight(6) + " " + FrontierAllocation +
                 "  DAILY $" + FrontierDailyRiskBudgetUsd().ToString("N0") +
-                "   DAX $" + (FrontierDailyRiskBudgetUsd() * FrontierDaxShare).ToString("N0") +
-                "   NAS $" +
-                    (FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare * NasAlignedPct / 100.0).ToString("N0") +
-                " / $" +
-                    (FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare * NasMisalignedPct / 100.0).ToString("N0") + "\n" +
+                "   A1 $" + (FrontierDailyRiskBudgetUsd() * FrontierDaxAShare()).ToString("N0") +
+                "  A2 $" + (FrontierDailyRiskBudgetUsd() * FrontierDaxBShare()).ToString("N0") +
+                "  A3 $" + (FrontierDailyRiskBudgetUsd() * FrontierDaxCShare()).ToString("N0") +
+                "  B1 $" + (FrontierDailyRiskBudgetUsd() * FrontierUkShare()).ToString("N0") +
+                "  C1 $" +
+                    (FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare() * NasAlignedPct / 100.0).ToString("N0") +
+                "/$" +
+                    (FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare() * NasMisalignedPct / 100.0).ToString("N0") + "\n" +
                 "GATE RISK " + riskGauge +
                 "  $" + committedRisk.ToString("N0") + "   HEADROOM " + headroomText + "\n" +
                 "OPEN    $" + openRisk.ToString("N0") + (unbounded ? " UNBOUNDED" : "") +
@@ -9628,17 +9687,119 @@ namespace cAlgo.Robots
             return approvedTarget / scale;
         }
 
+        // ----- allocation-profile share resolution -------------------------------------------
+        // A share of 0 means "this profile does not fund this lane": the caller falls back to the
+        // lane's static parameter value and ReportFrontierAllocation() flags it as UNFUNDED.
+        private bool FrontierFull()
+        {
+            return FrontierAllocation == FrontierAllocationProfile.FullArsenal;
+        }
+
+        private double FrontierDaxAShare()
+        {
+            return FrontierFull() ? FrontierFullDaxAShare : FrontierCoreDaxAShare;
+        }
+
+        private double FrontierDaxBShare()
+        {
+            return FrontierFull() ? FrontierFullDaxBShare : 0;
+        }
+
+        private double FrontierDaxCShare()
+        {
+            return FrontierFull() ? FrontierFullDaxCShare : 0;
+        }
+
+        private double FrontierUkShare()
+        {
+            return FrontierFull() ? FrontierFullUkShare : 0;
+        }
+
+        private double FrontierNasBudgetShare()
+        {
+            return FrontierFull() ? FrontierFullNasBudgetShare : FrontierCoreNasBudgetShare;
+        }
+
+        private double FrontierNasReentryShare()
+        {
+            return FrontierFull() ? FrontierFullNasReentryShare : FrontierCoreNasReentryShare;
+        }
+
         private double EffectiveDaxARiskRequest()
         {
             if (!FrontierActive()) return DaxARiskUsd;
-            return FrontierScaledRequest(FrontierDailyRiskBudgetUsd() * FrontierDaxShare);
+            return FrontierScaledRequest(FrontierDailyRiskBudgetUsd() * FrontierDaxAShare());
         }
 
         private double EffectiveNasReentryRisk()
         {
             if (!FrontierActive()) return NasReentryRiskUsd;
-            return FrontierScaledRequest(FrontierDailyRiskBudgetUsd() * FrontierNasReentryShare);
+            return FrontierScaledRequest(FrontierDailyRiskBudgetUsd() * FrontierNasReentryShare());
         }
+
+        private double EffectiveDaxBRiskRequest()
+        {
+            double share = FrontierDaxBShare();
+            if (!FrontierActive() || share <= 0) return DaxBRiskUsd;
+            return FrontierScaledRequest(FrontierDailyRiskBudgetUsd() * share);
+        }
+
+        private double EffectiveDaxCRiskRequest()
+        {
+            double share = FrontierDaxCShare();
+            if (!FrontierActive() || share <= 0) return DaxCRiskUsd;
+            return FrontierScaledRequest(FrontierDailyRiskBudgetUsd() * share);
+        }
+
+        private double EffectiveUkRiskRequest()
+        {
+            double share = FrontierUkShare();
+            if (!FrontierActive() || share <= 0) return UkARiskUsd;
+            return FrontierScaledRequest(FrontierDailyRiskBudgetUsd() * share);
+        }
+
+        // RunDaxWindow is shared by A1 and A2, so window risk is resolved by label here rather than
+        // frozen into the DaxWindow at construction: the frontier budget is a runtime quantity.
+        private double EffectiveDaxWindowRisk(DaxWindow window)
+        {
+            if (window == null) return 0;
+            if (window.Label == DaxALabel) return EffectiveDaxARiskRequest();
+            if (window.Label == DaxBLabel) return EffectiveDaxBRiskRequest();
+            return window.RiskUsd;
+        }
+
+        // Reports the resolved allocation at startup and warns about any ENABLED lane the active
+        // profile does not fund. Such a lane still trades, but from its static parameter value
+        // rather than a reserved share — exactly the condition that lets the portfolio overspend
+        // the frontier budget — so it is printed loudly and journalled.
+        private void ReportFrontierAllocation()
+        {
+            double budget = FrontierDailyRiskBudgetUsd();
+            double scale = EffectivePortfolioRiskScale();
+            double nasBudget = EffectiveNasC1DayBudget();
+            Print("FRONTIER | mode {0} | profile {1} | daily budget ${2:F0} = {3:F0}% of the {4:F1}% daily limit",
+                FrontierModeText(), FrontierAllocation, budget, FrontierModeFraction() * 100.0,
+                FtmoDailyLossPct);
+            Print("FRONTIER ALLOCATION (approved risk) | DAX A1 ${0:F0} | A2 ${1:F0} | A3 ${2:F0} | UK B1 ${3:F0} | NAS C1 ${4:F0}/{5:F0} | C2 ${6:F0} | GOLD ${7:F0} independent",
+                EffectiveDaxARiskRequest() * scale, EffectiveDaxBRiskRequest() * scale,
+                EffectiveDaxCRiskRequest() * scale, EffectiveUkRiskRequest() * scale,
+                nasBudget * scale * NasAlignedPct / 100.0,
+                nasBudget * scale * NasMisalignedPct / 100.0,
+                EffectiveNasReentryRisk() * scale, EffectiveGoldRiskRequest() * scale);
+            if (!FrontierActive()) return;
+            var unfunded = new List<string>();
+            if (DaxBEnabled && FrontierDaxBShare() <= 0) unfunded.Add("DAX A2");
+            if (DaxCEnabled && FrontierDaxCShare() <= 0) unfunded.Add("DAX A3");
+            if (UkAEnabled && FrontierUkShare() <= 0) unfunded.Add("UK B1");
+            if (unfunded.Count == 0) return;
+            string lanes = string.Join(", ", unfunded);
+            Print("*** FRONTIER WARNING: {0} enabled but UNFUNDED under the {1} allocation profile. They will size from the static parameter table and can overspend the daily budget. Switch to FullArsenal or disable them. ***",
+                lanes, FrontierAllocation);
+            Journal("FRONTIER_UNFUNDED_LANES",
+                "\"profile\":\"" + FrontierAllocation + "\",\"mode\":\"" + FrontierModeText() +
+                "\",\"lanes\":\"" + Js(lanes) + "\"");
+        }
+
 
         // Gold sits OUTSIDE the daily budget by design: it is a non-correlated multi-day swing, not
         // part of the same-day DAX+NAS stopout constraint the budget is derived from. It is therefore
@@ -9669,15 +9830,16 @@ namespace cAlgo.Robots
             if (scale <= 0 || double.IsNaN(scale) || double.IsInfinity(scale)) return 0;
             double maxDay = 0;
             if (DaxAEnabled) maxDay += EffectiveDaxARiskRequest() * scale * DaxATpPts / DaxASlPts;
-            if (DaxBEnabled) maxDay += DaxBRiskUsd * scale * DaxBTpPts / DaxBSlPts;
-            if (DaxCEnabled && !IsFunded()) maxDay += DaxCRiskUsd * scale * DaxCTpMultiple;
+            if (DaxBEnabled) maxDay += EffectiveDaxBRiskRequest() * scale * DaxBTpPts / DaxBSlPts;
+            if (DaxCEnabled && !IsFunded())
+                maxDay += EffectiveDaxCRiskRequest() * scale * DaxCTpMultiple;
             return maxDay;
         }
 
         private double EffectiveNasC1DayBudget()
         {
             double budget = FrontierActive()
-                ? FrontierScaledRequest(FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare)
+                ? FrontierScaledRequest(FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare())
                 : NasDayBudgetUsd;
             return budget * (IsFunded() ? NasFundedAdoptionRiskPct / 100.0 : 1.0);
         }
