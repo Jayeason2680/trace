@@ -14,7 +14,7 @@
 //   it unprofitable, and a sixth, non-correlated commodity lane (XAUUSD H1 Break-of-Structure) is
 //   added. The two retained core setups are unchanged.
 //
-// V34.ARSENAL CHANGE SET — five re-engineered setups plus one new lane
+// V34.ARSENAL CHANGE SET — five re-engineered setups, one new lane, and the frontier
 //   1. DAX B (A2) BECOMES THE FRANKFURT 08:00 CASH-OPEN VELOCITY BURST.
 //      Old fault: the 08:15-08:30 London opening range was unbounded (RangeMax 100000) and entries
 //      ran to 11:00 London, so the setup traded inside Frankfurt opening order-matching chop and
@@ -54,11 +54,45 @@
 //      multi-day swing lane, so it is deliberately exempt from the European cross-day flatten and
 //      from every intraday session backstop; a configurable maximum hold time bounds it instead.
 //
+//   6. FRONTIER RISK ARCHITECTURE. Risk is no longer a static per-setup table. One mode selects the
+//      DAILY RISK BUDGET as a fraction of this profile's OWN official daily-loss limit, and that
+//      budget is split across the two frontier-allocated core engines:
+//
+//        MODE    BUDGET       S1 (3.0% limit)                     S2 (5.0% limit)
+//        GREEN   50% of it    $1,500  DAX 825    NAS 675/450      $2,500  DAX 1,375  NAS 1,125/750
+//        ORANGE  75% of it    $2,250  DAX 1,238  NAS 1,013/675    $3,750  DAX 2,063  NAS 1,688/1,125
+//        RED     90% of it    $2,700  DAX 1,485  NAS 1,215/810    $4,500  DAX 2,475  NAS 2,025/1,350
+//
+//      DAX A1 takes 55% of the budget. The NAS C1 DAY budget takes 60%, which the inherited aligned
+//      and misaligned multipliers (75% / 50%) resolve to exactly the 45% / 30% of daily budget shown
+//      above - so the frontier and the existing NAS sizing compose rather than fight. NAS C2 draws
+//      only the residual NAS budget. GOLD D1 is allocated INDEPENDENTLY at 0.25% of the locked
+//      initial balance, because a non-correlated multi-day swing is not part of the same-day
+//      DAX+NAS stopout constraint the daily budget is derived from.
+//
+//      GREEN is the shipped default: it is the only tier the source report assigns a 0.00%
+//      floor-breach probability. ORANGE and RED are one parameter change away and each needs its
+//      own native soak before it carries real capital.
+//
 // RISK POSTURE
-//   All seven setups ship ENABLED with non-zero risk. Every new proposal still passes through the
-//   single atomic account gate unchanged: equity floors, Prague day anchor, open/pending stop risk,
-//   execution reserve, correlation throttle, same-direction cluster cap and capacity clipping all
-//   apply exactly as before. The gate, not the setup table, is what bounds portfolio heat.
+//   The frontier raises the REQUEST; it never raises the approval. Every proposal still passes the
+//   unchanged atomic account gate: equity floors, Prague day anchor, open and pending stop risk,
+//   execution reserve, correlation throttle, same-direction cluster cap and capacity clipping. The
+//   frontier budget also becomes the internal daily worst-case cap, but the buffered official daily
+//   floor and the max-loss floor are untouched and the gate still takes the MAXIMUM of all three. In
+//   RED the buffered official floor is normally the stricter of the two and the gate clips to it -
+//   that is the intended fail-closed ordering, not a misconfiguration.
+//
+// DEPLOYMENT PER THE SETUP SCORE HIERARCHY
+//   DEPLOY (CORE)  DAX A1 94/100 and NAS C1 91/100 - the two frontier-allocated engines.
+//   ADD (SWING)    GOLD D1 86/100 - independent 0.25% allocation, outside the daily budget.
+//   EXPERIMENT     NAS C2 82/100 trap fade - residual NAS budget only.
+//   DROP / PRUNE   UK B1 35/100, plus DAX B and DAX C, which carry no frontier allocation.
+//
+//   The re-engineered DAX B, DAX C and UK B1 mechanics below are fully implemented and ship
+//   DISABLED. That prune verdict was measured on their ORIGINAL mechanics, so they are unproven
+//   rather than disproven: backtest each on its own before enabling it, and allocate it budget if
+//   you do - enabling one as-is spends capacity the frontier has not reserved.
 //
 // DELIBERATELY FROZEN IN V34.ARSENAL — these are NOT release identity and must never track a version:
 //   - The "V310" durable hard-halt latch payload/parser marker.
@@ -373,6 +407,17 @@ namespace cAlgo.Robots
             LegacyPermanent
         }
 
+        // V34.ARSENAL FRONTIER: the FTMO frontier risk architecture. GREEN preserves capital,
+        // ORANGE is balanced-aggressive, RED is maximum frontier velocity. OFF restores the
+        // static per-setup risk table exactly as it behaved before the frontier existed.
+        public enum FrontierRiskMode
+        {
+            Off,
+            Green,
+            Orange,
+            Red
+        }
+
         private enum EntryStyle
         {
             MarketWithPips,
@@ -456,19 +501,28 @@ namespace cAlgo.Robots
         [Parameter("DAX A RefBreak", DefaultValue = true, Group = "3. Modules")]
         public bool DaxAEnabled { get; set; }
 
-        // V34.ARSENAL: A2 is re-engineered into the Frankfurt 08:00 cash-open velocity burst
-        // and ships ENABLED with live risk. See the DAX B window in InitialiseDax().
-        [Parameter("DAX B Frankfurt open burst (A2)", DefaultValue = true, Group = "3. Modules")]
+        // V34.ARSENAL: A2 is re-engineered into the Frankfurt 08:00 cash-open velocity burst, but
+        // it ships DISABLED. The frontier budget allocates 55% to A1 and 60% to the NAS C1 day
+        // budget and nothing to A2, so enabling A2 would spend budget the frontier has not
+        // reserved. The V33.SPARK 5-year tick audit also lists DAX B inside its pruned drag. The
+        // re-engineered mechanics are fully implemented and one switch away once independently
+        // backtested; do that before turning this on.
+        [Parameter("DAX B Frankfurt open burst (A2)", DefaultValue = false, Group = "3. Modules")]
         public bool DaxBEnabled { get; set; }
 
-        // V34.ARSENAL: A3 is re-engineered into the pre-London squeeze breakout (entries stop
-        // at 09:15 London) and ships ENABLED with live risk.
-        [Parameter("DAX C Pre-London squeeze (A3, Evaluation only)", DefaultValue = true, Group = "3. Modules")]
+        // V34.ARSENAL: A3 is re-engineered into the pre-London squeeze breakout (entries stop at
+        // 09:15 London) but ships DISABLED for the same reason as A2 — it carries no frontier
+        // budget allocation, and the audit prunes it by default.
+        [Parameter("DAX C Pre-London squeeze (A3, Evaluation only)", DefaultValue = false, Group = "3. Modules")]
         public bool DaxCEnabled { get; set; }
 
-        // V33.SPARK CORE-2 pruned UK A to $0 risk. V34.ARSENAL replaces the Coil30 limit-at-mid
-        // mechanics with the 08:00 London cash-open momentum sweep and re-enables it.
-        [Parameter("UK B1 London open sweep", DefaultValue = true, Group = "3. Modules")]
+        // V34.ARSENAL replaces the Coil30 limit-at-mid mechanics with the 08:00 London cash-open
+        // momentum sweep, but ships it DISABLED. The V33.SPARK setup-score hierarchy scores UK B1
+        // 35/100 with an explicit DROP/PRUNE directive and attributes -$22k of 5-year drag to it,
+        // and the frontier allocates it no budget. NOTE: that verdict was measured on the Coil30
+        // mechanics, NOT on the re-engineered sweep implemented below — so this is "unproven",
+        // not "disproven". Backtest the sweep on its own before enabling it.
+        [Parameter("UK B1 London open sweep", DefaultValue = false, Group = "3. Modules")]
         public bool UkAEnabled { get; set; }
 
         [Parameter("UK B RefBreakX test (forced OFF)", DefaultValue = false, Group = "3. Modules")]
@@ -477,12 +531,17 @@ namespace cAlgo.Robots
         [Parameter("NAS C1 Bell core", DefaultValue = true, Group = "3. Modules")]
         public bool NasCoreEnabled { get; set; }
 
-        // V34.ARSENAL: C2 is re-engineered into the 10:00 ET failed-drive liquidity trap fade.
+        // V34.ARSENAL: C2 is re-engineered into the 10:00 ET failed-drive liquidity trap fade,
+        // which the setup-score hierarchy scores 82/100 and designates EXPERIMENT with a 1:3R
+        // target. It ships ENABLED and is bounded to the RESIDUAL NAS day budget left after C1,
+        // so it can never spend allocation the frontier has already committed to the core.
         [Parameter("NAS C2 trap fade (Evaluation only)", DefaultValue = true, Group = "3. Modules")]
         public bool NasReentryEnabled { get; set; }
 
-        // V34.ARSENAL: the new non-correlated commodity lane. Turning this OFF removes every
-        // gold symbol/data requirement, so the bot still starts on accounts without XAUUSD.
+        // V34.ARSENAL: the new non-correlated commodity lane, scored 86/100 with an ADD (SWING)
+        // directive and an independent 0.25% swing allocation outside the daily budget. Turning
+        // this OFF removes every gold symbol/data requirement, so the bot still starts on an
+        // account without XAUUSD.
         [Parameter("GOLD D1 H1 break-of-structure", DefaultValue = true, Group = "3. Modules")]
         public bool GoldEnabled { get; set; }
 
@@ -664,6 +723,25 @@ namespace cAlgo.Robots
 
         [Parameter("NAS funded adoption risk %", DefaultValue = 90, MinValue = 50, MaxValue = 100, Step = 5, Group = "4. Setup Risk")]
         public double NasFundedAdoptionRiskPct { get; set; }
+
+        // -----------------------------------------------------------------------------------------
+        // 4F. V34.ARSENAL — FRONTIER RISK ARCHITECTURE
+        // -----------------------------------------------------------------------------------------
+        // GREEN 50% / ORANGE 75% / RED 90% of the official daily-loss limit becomes the daily risk
+        // budget; DAX A1 takes 55% of it and the NAS C1 day budget 60% (which the inherited
+        // aligned/misaligned split resolves to 45% / 30%). OFF restores the static risk table.
+        //
+        // GREEN is the deliberate default. It is the only tier the source report assigns a 0.00%
+        // floor-breach probability, and it is still a material step up from the static table.
+        // Moving to ORANGE or RED is a single parameter change and needs its own native soak.
+        [Parameter("Frontier risk mode", DefaultValue = FrontierRiskMode.Green, Group = "4F. Frontier Risk")]
+        public FrontierRiskMode FrontierMode { get; set; }
+
+        // The gold lane is allocated INDEPENDENTLY of the daily budget, as a flat percentage of
+        // the locked initial balance, because it is a non-correlated multi-day swing rather than
+        // part of the same-day DAX+NAS stopout constraint the daily budget is derived from.
+        [Parameter("Frontier GOLD swing allocation %", DefaultValue = 0.25, MinValue = 0.0, MaxValue = 2.0, Step = 0.05, Group = "4F. Frontier Risk")]
+        public double GoldSwingAllocationPct { get; set; }
 
         // -----------------------------------------------------------------------------------------
         // 4G. V34.ARSENAL — GOLD D1 GEOMETRY AND THE UK B1 COMMODITY CONFLUENCE FILTER
@@ -984,6 +1062,22 @@ namespace cAlgo.Robots
         private const double NasTrapBodyFractionMin = 0.50;
         private static readonly TimeSpan NasTrapWindowStart = new TimeSpan(10, 0, 0);
         private static readonly TimeSpan NasTrapWindowEnd = new TimeSpan(10, 20, 0);
+        //
+        // FRONTIER RISK ARCHITECTURE — shares of the daily risk budget, which is itself
+        // (locked initial balance x official daily-loss % x mode fraction).
+        private const double FrontierRedFraction = 0.90;
+        private const double FrontierOrangeFraction = 0.75;
+        private const double FrontierGreenFraction = 0.50;
+        // DAX A1 takes 55% of the budget outright.
+        private const double FrontierDaxShare = 0.55;
+        // The NAS C1 DAY BUDGET is 60% of the frontier budget. The inherited aligned/misaligned
+        // multipliers (NasAlignedPct 75% / NasMisalignedPct 50%) then resolve it to exactly the
+        // 45% / 30% of daily budget the frontier specifies, so the two mechanisms compose rather
+        // than overriding one another.
+        private const double FrontierNasBudgetShare = 0.60;
+        // The C2 trap fade is an EXPERIMENT tier: it draws only the residual NAS budget left
+        // after an aligned C1, and the Math.Min against the remaining day budget still binds it.
+        private const double FrontierNasReentryShare = 0.15;
         //
         // GOLD D1 — XAUUSD H1 break-of-structure.
         private const int GoldMinimumBars = 60;
@@ -1599,7 +1693,13 @@ namespace cAlgo.Robots
             Print("CONFIG | id={0} | profile={1} stage=Phase1 (deployment identity is not printed)",
                 ConfigurationFingerprint(), ProfileCode);
             Print("GATE | daily worst-case ${0:F0} | max-loss safety ${1:F0} | reserve {2:F0}% | max-loss type STATIC",
-                DailyWorstCaseCapUsd, MaxLossSafetyBufferUsd, ExecutionReservePct);
+                EffectiveDailyWorstCaseCapUsd(), MaxLossSafetyBufferUsd, ExecutionReservePct);
+            Print("FRONTIER | mode {0} | daily budget ${1:F0} = {2:F0}% of the {3:F1}% daily limit | DAX A1 ${4:F0} | NAS C1 ${5:F0} aligned / ${6:F0} misaligned | GOLD ${7:F0} independent",
+                FrontierModeText(), FrontierDailyRiskBudgetUsd(), FrontierModeFraction() * 100.0,
+                FtmoDailyLossPct, FrontierDailyRiskBudgetUsd() * FrontierDaxShare,
+                FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare * NasAlignedPct / 100.0,
+                FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare * NasMisalignedPct / 100.0,
+                FrontierActive() ? InitialBalance * GoldSwingAllocationPct / 100.0 : GoldRiskUsd);
 
             Journal("BOT_START",
                 "\"run\":\"" + _runId + "\",\"stage\":\"" + Stage + "\",\"host\":\"" + Js(SymbolName) + "\",\"host_tf\":\"" + Bars.TimeFrame +
@@ -1619,6 +1719,16 @@ namespace cAlgo.Robots
                 ",\"profit_ladder_enabled\":" + Bool(CurrentProfitLadderEnabled()) +
                 ",\"downside_derisk_enabled\":" + Bool(CurrentDownsideDeriskEnabled()) +
                 ",\"day_profit_pct\":" + Jn(_dynamicDayProfitPct) +
+                ",\"frontier_mode\":\"" + FrontierModeText() + "\"" +
+                ",\"frontier_daily_budget\":" + Jn(FrontierDailyRiskBudgetUsd()) +
+                ",\"frontier_dax_a1\":" + Jn(FrontierDailyRiskBudgetUsd() * FrontierDaxShare) +
+                ",\"frontier_nas_aligned\":" +
+                    Jn(FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare * NasAlignedPct / 100.0) +
+                ",\"frontier_nas_misaligned\":" +
+                    Jn(FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare * NasMisalignedPct / 100.0) +
+                ",\"frontier_gold\":" + Jn(FrontierActive()
+                    ? InitialBalance * GoldSwingAllocationPct / 100.0 : GoldRiskUsd) +
+                ",\"internal_daily_cap\":" + Jn(EffectiveDailyWorstCaseCapUsd()) +
                 ",\"startup_halt\":" + Bool(_startupHalt) + ",\"halt_reason\":\"" + Js(_haltReason) + "\"");
 
             UpdateEnrollmentControl();
@@ -3399,7 +3509,7 @@ namespace cAlgo.Robots
             if (!ApplyCorrelationThrottle(p, ref approvedRisk, out reason)) return false;
             if (approvedRisk <= 0) { reason = "effective_risk_zero"; return false; }
 
-            double internalDailyFloor = _dayAnchorBalance - DailyWorstCaseCapUsd;
+            double internalDailyFloor = _dayAnchorBalance - EffectiveDailyWorstCaseCapUsd();
             double bufferedOfficialDailyFloor = OfficialDailyLimit() + EmergencyBufferUsd;
             double bufferedMaxLossFloor = MaxLossLimit() + MaxLossSafetyBufferUsd;
             double requiredFloor = Math.Max(Math.Max(internalDailyFloor, bufferedOfficialDailyFloor), bufferedMaxLossFloor);
@@ -5928,7 +6038,7 @@ namespace cAlgo.Robots
         private void CheckAccountEmergency()
         {
             if (!_accountLeaseOwned) return;
-            double internalDailyFloor = _dayAnchorBalance - DailyWorstCaseCapUsd;
+            double internalDailyFloor = _dayAnchorBalance - EffectiveDailyWorstCaseCapUsd();
             double officialDailyEmergencyFloor = OfficialDailyLimit() + EmergencyBufferUsd;
             double dailyEmergencyFloor = Math.Max(internalDailyFloor, officialDailyEmergencyFloor);
             double emergencyMaxLossFloor = MaxLossLimit() + EmergencyBufferUsd;
@@ -6218,7 +6328,8 @@ namespace cAlgo.Robots
                 Label = window.Label,
                 Symbol = _daxSymbol,
                 Side = up ? TradeType.Buy : TradeType.Sell,
-                RequestedRisk = window.RiskUsd,
+                // Under the frontier, A1 is budget-allocated rather than table-allocated.
+                RequestedRisk = window.Label == DaxALabel ? EffectiveDaxARiskRequest() : window.RiskUsd,
                 SlDistancePts = window.SlPts,
                 TpDistancePts = window.TpPts,
                 Style = EntryStyle.MarketWithPips,
@@ -6338,10 +6449,7 @@ namespace cAlgo.Robots
         private void CheckDaxLocalProfitLock()
         {
             if (_daxDay == DateTime.MinValue || _daxDailyProfitLocked) return;
-            double maxDay = 0;
-            if (DaxAEnabled) maxDay += DaxARiskUsd * DaxATpPts / DaxASlPts;
-            if (DaxBEnabled) maxDay += DaxBRiskUsd * DaxBTpPts / DaxBSlPts;
-            if (DaxCEnabled && !IsFunded()) maxDay += DaxCRiskUsd * DaxCTpMultiple;
+            double maxDay = DaxDailyMaxProfitUsd();
             double pnl = ModuleDayPnl(new[] { DaxALabel, DaxBLabel, DaxCLabel }, DaxSymbolName, _daxDay, true);
             if (maxDay > 0 && pnl >= 0.70 * maxDay)
             {
@@ -6368,10 +6476,7 @@ namespace cAlgo.Robots
                 _daxConsecutiveLosses = trade.NetProfit > 0 ? 0 : _daxConsecutiveLosses + 1;
             _daxDayBlocked = _daxConsecutiveLosses >= 3;
 
-            double maxDay = 0;
-            if (DaxAEnabled) maxDay += DaxARiskUsd * DaxATpPts / DaxASlPts;
-            if (DaxBEnabled) maxDay += DaxBRiskUsd * DaxBTpPts / DaxBSlPts;
-            if (DaxCEnabled && !IsFunded()) maxDay += DaxCRiskUsd * DaxCTpMultiple;
+            double maxDay = DaxDailyMaxProfitUsd();
             double pnl = closes.Sum(x => x.NetProfit) +
                          Positions.Where(x => x.SymbolName == DaxSymbolName && labels.Contains(x.Label))
                                   .Sum(x => x.NetProfit);
@@ -6878,7 +6983,7 @@ namespace cAlgo.Robots
                 Label = GoldLabel,
                 Symbol = _goldSymbol,
                 Side = side,
-                RequestedRisk = GoldRiskUsd,
+                RequestedRisk = EffectiveGoldRiskRequest(),
                 SlDistancePts = stopDistance,
                 TpDistancePts = targetDistance,
                 Style = EntryStyle.MarketWithPips,
@@ -7243,7 +7348,11 @@ namespace cAlgo.Robots
             string confirmation;
             if (!NasTrapSweepConfirmed(fadeDirection, out confirmation)) return;
 
-            double risk = Math.Min(NasReentryRiskUsd, Math.Max(0, NasDayBudgetUsd - _nasDayRiskUsed));
+            // Both terms are pre-scale requests, matching how _nasDayRiskUsed accumulates. The
+            // day budget term now uses the same effective budget C1 was sized from, so the trap
+            // fade genuinely draws the residual rather than an unrelated static parameter.
+            double risk = Math.Min(EffectiveNasReentryRisk(),
+                Math.Max(0, EffectiveNasC1DayBudget() - _nasDayRiskUsed));
             if (risk <= 0) { _nasPendingReentry = false; _nasReDone = true; return; }
 
             double stopDistance = _nasDriveRange * NasTrapStopDriveMultiple;
@@ -9152,6 +9261,7 @@ namespace cAlgo.Robots
                     "EQUITY $" + Account.Equity.ToString("N0") +
                     " | SCALE " + hudRiskScale.ToString("F2") + " " + hudRiskTier +
                     " | RISK $" + (openRisk + pendingRisk).ToString("N0") +
+                    " | FRONTIER " + FrontierModeText() +
                     " | LEDGER " + DesignLedgerState();
                 Chart.DrawStaticText("ATLAS3_MASTER_HUD", compact, VerticalAlignment.Top, HorizontalAlignment.Left, stateColor);
                 return;
@@ -9191,6 +9301,13 @@ namespace cAlgo.Robots
                 "   BALANCE  $" + Account.Balance.ToString("N0").PadLeft(8) + "\n" +
                 "FLOOR   $" + effectiveFloor.ToString("N0").PadLeft(8) +
                 "   BUFFER   $" + floorBuffer.ToString("N0").PadLeft(8) + "\n" +
+                "FRONTIER " + FrontierModeText().PadRight(6) +
+                "  DAILY $" + FrontierDailyRiskBudgetUsd().ToString("N0") +
+                "   DAX $" + (FrontierDailyRiskBudgetUsd() * FrontierDaxShare).ToString("N0") +
+                "   NAS $" +
+                    (FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare * NasAlignedPct / 100.0).ToString("N0") +
+                " / $" +
+                    (FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare * NasMisalignedPct / 100.0).ToString("N0") + "\n" +
                 "SCALE   " + hudRiskScale.ToString("F2") + "  " + hudRiskTier +
                 "   DAY " + _dynamicDayProfitPct.ToString("F2") + "%  RATCHET " + _dynamicRatchetProfitPct.ToString("F2") + "%\n" +
                 "RISK MODE  STATIC PHASE 1   DYNAMIC LADDER COMPILE-LOCKED OFF\n" +
@@ -9390,7 +9507,7 @@ namespace cAlgo.Robots
 
         private double DesignRequiredFloor()
         {
-            double internalDailyFloor = _dayAnchorBalance - DailyWorstCaseCapUsd;
+            double internalDailyFloor = _dayAnchorBalance - EffectiveDailyWorstCaseCapUsd();
             double bufferedOfficialDailyFloor = OfficialDailyLimit() + EmergencyBufferUsd;
             double bufferedMaxLossFloor = MaxLossLimit() + MaxLossSafetyBufferUsd;
             return Math.Max(Math.Max(internalDailyFloor, bufferedOfficialDailyFloor), bufferedMaxLossFloor);
@@ -9733,9 +9850,108 @@ namespace cAlgo.Robots
             return _dynamicRiskTier;
         }
 
+        // =========================================================================================
+        // FRONTIER RISK ARCHITECTURE — RED / ORANGE / GREEN
+        // =========================================================================================
+        // Each mode expresses the DAILY RISK BUDGET as a fraction of this profile's own official
+        // daily-loss limit, so one enum yields 3.0%-based budgets on S1 and 5.0%-based budgets on S2
+        // with no duplicated tables. The budget is then split across the two frontier-allocated core
+        // engines only: DAX A1 takes 55%, and the NAS C1 day budget takes 60% which the inherited
+        // aligned/misaligned multipliers resolve to 45% / 30% of the daily budget.
+        //
+        // The frontier raises the REQUEST. It never raises the approval: the atomic account gate,
+        // the correlation throttle, the same-direction cluster cap, the near-floor halving, the
+        // execution reserve and the capacity clip all still run afterwards and remain the binding
+        // constraints. Nothing in this section can move an equity floor.
+        private bool FrontierActive()
+        {
+            return FrontierMode != FrontierRiskMode.Off && Stage != StageMode.Unconfigured &&
+                InitialBalance > 0;
+        }
+
+        private double FrontierModeFraction()
+        {
+            if (FrontierMode == FrontierRiskMode.Red) return FrontierRedFraction;
+            if (FrontierMode == FrontierRiskMode.Orange) return FrontierOrangeFraction;
+            if (FrontierMode == FrontierRiskMode.Green) return FrontierGreenFraction;
+            return 0;
+        }
+
+        private string FrontierModeText()
+        {
+            return FrontierActive() ? FrontierMode.ToString().ToUpperInvariant() : "OFF";
+        }
+
+        private double FrontierDailyRiskBudgetUsd()
+        {
+            if (!FrontierActive()) return 0;
+            return InitialBalance * FtmoDailyLossPct / 100.0 * FrontierModeFraction();
+        }
+
+        // Frontier allocations are stated as the risk that must SURVIVE the portfolio risk scale, so
+        // the request handed to the gate is pre-divided by that scale and multiplied back inside
+        // TryApproveProposal. A non-positive or non-finite scale yields 0, which the gate rejects as
+        // effective_risk_zero — the frontier fails closed rather than guessing a denominator.
+        private double FrontierScaledRequest(double approvedTarget)
+        {
+            double scale = EffectivePortfolioRiskScale();
+            if (approvedTarget <= 0 || scale <= 0 || double.IsNaN(scale) || double.IsInfinity(scale))
+                return 0;
+            return approvedTarget / scale;
+        }
+
+        private double EffectiveDaxARiskRequest()
+        {
+            if (!FrontierActive()) return DaxARiskUsd;
+            return FrontierScaledRequest(FrontierDailyRiskBudgetUsd() * FrontierDaxShare);
+        }
+
+        private double EffectiveNasReentryRisk()
+        {
+            if (!FrontierActive()) return NasReentryRiskUsd;
+            return FrontierScaledRequest(FrontierDailyRiskBudgetUsd() * FrontierNasReentryShare);
+        }
+
+        // Gold sits OUTSIDE the daily budget by design: it is a non-correlated multi-day swing, not
+        // part of the same-day DAX+NAS stopout constraint the budget is derived from. It is therefore
+        // allocated as a flat percentage of the locked initial balance.
+        private double EffectiveGoldRiskRequest()
+        {
+            if (!FrontierActive()) return GoldRiskUsd;
+            return FrontierScaledRequest(InitialBalance * GoldSwingAllocationPct / 100.0);
+        }
+
+        // The internal daily worst-case cap becomes the frontier budget. The buffered official daily
+        // floor and the max-loss floor are UNCHANGED and the gate still takes the maximum of all
+        // three, so this can raise the internal cap toward the official limit but can never push the
+        // binding floor past it. In RED the official floor plus the emergency buffer normally stays
+        // the stricter of the two, and the gate clips to it — that is the intended fail-closed order.
+        private double EffectiveDailyWorstCaseCapUsd()
+        {
+            if (!FrontierActive()) return DailyWorstCaseCapUsd;
+            return FrontierDailyRiskBudgetUsd();
+        }
+
+        // The DAX daily profit lock compares REALISED dollars, so its ceiling must be built from the
+        // approved (post-scale) risk rather than the pre-scale request. Under the frontier this keeps
+        // the lock meaningful; with the static table it restores the comparison that was intended.
+        private double DaxDailyMaxProfitUsd()
+        {
+            double scale = EffectivePortfolioRiskScale();
+            if (scale <= 0 || double.IsNaN(scale) || double.IsInfinity(scale)) return 0;
+            double maxDay = 0;
+            if (DaxAEnabled) maxDay += EffectiveDaxARiskRequest() * scale * DaxATpPts / DaxASlPts;
+            if (DaxBEnabled) maxDay += DaxBRiskUsd * scale * DaxBTpPts / DaxBSlPts;
+            if (DaxCEnabled && !IsFunded()) maxDay += DaxCRiskUsd * scale * DaxCTpMultiple;
+            return maxDay;
+        }
+
         private double EffectiveNasC1DayBudget()
         {
-            return NasDayBudgetUsd * (IsFunded() ? NasFundedAdoptionRiskPct / 100.0 : 1.0);
+            double budget = FrontierActive()
+                ? FrontierScaledRequest(FrontierDailyRiskBudgetUsd() * FrontierNasBudgetShare)
+                : NasDayBudgetUsd;
+            return budget * (IsFunded() ? NasFundedAdoptionRiskPct / 100.0 : 1.0);
         }
 
         private double ReconstructedStageInitialBalance()
